@@ -10,8 +10,8 @@ from dotenv import load_dotenv
 from market.itemdict import ItemDict
 from worker.pricechecker import PriceChecker
 
-load_dotenv("test/.env")
-TEST_GUILD = discord.Object(670441933931413514)
+load_dotenv(".env")
+CMD_TREE_GUILDS = [discord.object(guild) for guild in os.getenv("GUILD").split(",")]
 
 
 class HttpSession:
@@ -60,7 +60,8 @@ class AraguBot(commands.Bot):
         # self.tree.clear_commands(guild=None)
         # await self.tree.sync()
         # self.tree.clear_commands(guild=TEST_GUILD)
-        await self.tree.sync(guild=TEST_GUILD)
+        for guild in CMD_TREE_GUILDS:
+            await self.tree.sync(guild=guild)
 
     async def close(self):
         global bot_http_session
@@ -107,15 +108,11 @@ async def alias(ctx: commands.Context, item_name, item_nickname):
     #     await ctx.send(f"{item_nickname} is an alias of item {item_dict[item_nickname]}")
 
 
-@bot.tree.command(
-    guild=TEST_GUILD, name="ffxiv-market-buy", description="亞拉戈機械貓 - 繁中市場查價"
-)
+@bot.tree.command(name="ffxiv-market-buy", description="亞拉戈機械貓 - 繁中市場查價")
 async def buy(interaction: discord.Interaction):
     global item_dict, world_dict, bot_http_session, local_tz
 
-    worker = PriceChecker(
-        interaction, item_dict, world_dict, bot_http_session, local_tz
-    )
+    worker = PriceChecker(interaction, item_dict, world_dict, bot_http_session, local_tz)
     await worker.start()
 
 
