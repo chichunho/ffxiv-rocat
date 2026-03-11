@@ -7,16 +7,11 @@ import pytz
 from discord.ext import commands
 from dotenv import load_dotenv
 
-from app import keep_alive
-from models.CommandRequest import CommandRequest
-from universalisChef.Chef import Chef
-from utils.CommandDecoder import CommandDecoder
-from Waitress.GambleWaitress import GambleWaitress
-from Waitress.Waitress import Waitress
+from market.itemdict import ItemDict
+from worker.pricechecker import PriceChecker
 
-load_dotenv()
-
-keep_alive()
+load_dotenv("test/.env")
+TEST_GUILD = discord.Object(670441933931413514)
 
 
 class HttpSession:
@@ -30,6 +25,42 @@ class HttpSession:
 class AraguBot(commands.Bot):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+
+    async def setup_hook(self):
+        global item_dict
+        with open("market/data/item_pinyin.json", "r", encoding="utf-8") as in_f:
+            fuzzy_dict: dict[str, list[str]] = json.load(in_f)
+        with open("market/data/item.json", "r", encoding="utf-8") as in_f:
+            default_dict: dict[str, str] = json.load(in_f)
+        with open("market/data/item_hotfix.json", "r", encoding="utf-8") as in_f:
+            hotfix_dict: dict[str, str] = json.load(in_f)
+        with open("market/data/item_alias.json") as in_f:
+            alias_dict: dict[str, str] = json.load(in_f)
+        with open("market/data/item_cn.json", "r", encoding="utf-8") as in_f:
+            sc_dict: dict[str, str] = json.load(in_f)
+
+        item_dict = ItemDict(
+            default_dict | hotfix_dict,
+            alias_dict,
+            fuzzy_dict,
+            sc_dict,
+        )
+
+        global world_dict
+        world_dict = {}
+        with open("data/worlds.json", "r", encoding="utf-8") as in_f:
+            world_dict = json.load(in_f)
+
+        global local_tz
+        local_tz = pytz.timezone("Asia/Taipei")
+
+        global bot_http_session
+        bot_http_session = HttpSession()
+
+        # self.tree.clear_commands(guild=None)
+        # await self.tree.sync()
+        # self.tree.clear_commands(guild=TEST_GUILD)
+        await self.tree.sync(guild=TEST_GUILD)
 
     async def close(self):
         global bot_http_session
@@ -57,124 +88,35 @@ async def ping(ctx: commands.Context):
 
 
 @commands.check(from_others)
-@bot.command(name="info")
-@bot.event
-async def item_price_agg(ctx: commands.Context, item_name, q="nq"):
-
-    return None
-
-    global item_dict, world_dict, local_tz
-    q = q.lower()
-
-    if q not in ("hq" or "nq"):
-        q = "nq"
-
-    waitress = Waitress(world_dict, item_dict, local_tz)
-
-    request = CommandRequest(ctx)
-    request.command = "get_item_price_agg"
-
-    item_id = 0
-    try:
-        if item_name in item_dict:
-            item_id = int(item_dict[item_name])
-    except ValueError:
-        item_id = int(item_name)
-
-    request.args = {
-        "item_ids": [item_id],
-        "location": "陸行鳥",
-    }
-
-    await waitress.start(request)
-
-
-@commands.check(from_others)
-@bot.command(name="buy")
-@bot.event
-async def item_price(ctx: commands.Context, args_str: str):
-    global command_decoder, chef
-
-    command_request = command_decoder.decode_command_item_price(
-        ctx,
-        [arg.strip() for arg in args_str.split()],
-    )
-
-    waitress = Waitress(chef)
-
-    await waitress.start(command_request)
-
-
-@commands.check(from_others)
-@bot.command(name="six")
-@bot.event
-async def gamble_six(ctx: commands.Context, args_str: str):
-    global command_decoder
-
-    command_request = command_decoder.decode_six(
-        ctx,
-        [arg.strip() for arg in args_str.split()],
-    )
-
-    waitress = GambleWaitress()
-
-    await waitress.start(command_request)
-
-
-@commands.check(from_others)
 @bot.command(name="alias")
 @bot.event
 async def alias(ctx: commands.Context, item_name, item_nickname):
-    global item_dict, item_alias
+    return
+    # global item_dict, item_alias
 
-    if item_name not in item_dict:
-        await ctx.send(f"{item_name} is not found")
+    # if item_name not in item_dict:
+    #     await ctx.send(f"{item_name} is not found")
 
-    if item_nickname not in item_dict:
-        item_alias[item_nickname] = item_dict[item_name]
-        item_dict[item_nickname] = item_dict[item_name]
-        with open("item_alias.json", "w", encoding="utf-8") as out_f:
-            json.dump(item_alias, out_f)
-        await ctx.send(f"{item_nickname} is now an alias of item {item_name}")
-    else:
-        await ctx.send(f"{item_nickname} is an alias of item {item_dict[item_nickname]}")
+    # if item_nickname not in item_dict:
+    #     item_alias[item_nickname] = item_dict[item_name]
+    #     item_dict[item_nickname] = item_dict[item_name]
+    #     with open("item_alias.json", "w", encoding="utf-8") as out_f:
+    #         json.dump(item_alias, out_f)
+    #     await ctx.send(f"{item_nickname} is now an alias of item {item_name}")
+    # else:
+    #     await ctx.send(f"{item_nickname} is an alias of item {item_dict[item_nickname]}")
 
 
-@bot.event
-async def on_ready():
-    global item_dict
-    item_dict = {}
-    with open("Item.json", "r", encoding="utf-8") as in_f:
-        _item_dict: dict[str, str] = json.load(in_f)
-    for item_id, item_name in _item_dict.items():
-        item_dict[item_id] = item_name
-        item_dict[item_name] = item_id
-    del _item_dict
+@bot.tree.command(
+    guild=TEST_GUILD, name="ffxiv-market-buy", description="亞拉戈機械貓 - 繁中市場查價"
+)
+async def buy(interaction: discord.Interaction):
+    global item_dict, world_dict, bot_http_session, local_tz
 
-    global item_alias
-    item_alias = {}
-    with open("item_alias.json", "r", encoding="utf-8") as in_f:
-        item_alias = json.load(in_f)
-
-    for item_nickname, item_id in item_alias.items():
-        item_dict[item_nickname] = item_id
-
-    global world_dict
-    world_dict = {}
-    with open("worlds.json", "r", encoding="utf-8") as in_f:
-        world_dict = json.load(in_f)
-
-    global local_tz
-    local_tz = pytz.timezone("Asia/Taipei")
-
-    global bot_http_session
-    bot_http_session = HttpSession()
-
-    global command_decoder
-    command_decoder = CommandDecoder(item_dict, world_dict, local_tz, bot_http_session)
-
-    global chef
-    chef = Chef(world_dict, item_dict, local_tz)
+    worker = PriceChecker(
+        interaction, item_dict, world_dict, bot_http_session, local_tz
+    )
+    await worker.start()
 
 
 bot.run(os.getenv("BOT_TOKEN"))

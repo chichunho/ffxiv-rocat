@@ -1,8 +1,9 @@
 from dataclasses import dataclass
 from itertools import combinations
 
-from models.CommandRequest import CommandRequest
-from utils.Embed import SixEmbed
+from discord.ext.commands import Context
+
+from gamble.embed import SixEmbed
 
 
 @dataclass
@@ -14,7 +15,7 @@ class ChoiceStat:
     exp_return: float
 
 
-class GambleWaitress:
+class GambleHelper:
     scores: dict[int, int] = {
         6: 10000,
         7: 36,
@@ -48,20 +49,20 @@ class GambleWaitress:
         (2, 4, 6),
     ]
 
-    def __init__(self):
-        pass
+    def __init__(self, ctx: Context, input_map: str):
+        self.ctx = ctx
+        self.input_map = input_map
+        self.global_cand = [i for i in range(1, 10) if str(i) not in input_map]
 
-    async def start(self, request: CommandRequest):
-        input_map = request.args["input_map"]
-        global_cand = request.args["global_cand"]
+    async def start(self):
         stats: list[ChoiceStat] = []
         for choice in self.choices:
             eles: list[str] = []
 
             for idx in choice:
-                eles.append(input_map[idx])
+                eles.append(self.input_map[idx])
 
-            min_return, max_return, avg_return, exp_return = self.get_stat(eles, global_cand)
+            min_return, max_return, avg_return, exp_return = self.get_stat(eles, self.global_cand)
 
             choice_stat = ChoiceStat(
                 choice,
@@ -77,7 +78,7 @@ class GambleWaitress:
 
         embed = SixEmbed(stats[0].choice)
 
-        await request.ctx.message.reply(content=embed.message())
+        await self.ctx.message.reply(content=embed.message())
 
     def get_norm_score_dist(
         self,

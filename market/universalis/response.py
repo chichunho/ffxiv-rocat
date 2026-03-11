@@ -1,75 +1,4 @@
-from datetime import datetime
 from typing import Any
-
-import pytz
-
-
-class ItemPriceAgg:
-    def __init__(
-        self,
-        row: Any,
-        world_dict: dict[str, str],
-        item_dict: dict[str, str],
-        local_tz: pytz.tzinfo,
-    ):
-        self.soup = {}
-        self.world_dict = world_dict
-        self.item_dict = item_dict
-        self.local_tz = local_tz
-        """
-        soup structure
-        {
-            "name": str,
-            "update_time": list[dict[str, int]],
-            "nq": {
-                "min": int,
-                "world": int
-            },
-            "hq": {
-                "min": int,
-                "world": int
-            }
-        }
-        """
-
-        self._cook(row)
-
-    def _cook(self, row: Any):
-        # read item id
-        self.soup["name"] = self.item_dict.get(str(row["itemId"]), str(row["itemId"]))
-
-        # read all world upload time
-        self.soup["update_at"] = {}
-        for record in row["worldUploadTimes"]:
-            world_name = self.world_dict.get(str(record["worldId"]), str(record["worldId"]))
-            update_time = datetime.fromtimestamp(record["timestamp"] // 1000).astimezone(
-                self.local_tz
-            )
-            self.soup["update_at"][world_name] = update_time
-
-        # nq result
-        if len(row["nq"]["minListing"]) > 0:
-            self.soup["nq"] = {
-                "min": row["nq"]["minListing"]["dc"]["price"],
-                "world": self.world_dict.get(
-                    str(row["nq"]["minListing"]["dc"]["worldId"]),
-                    str(row["nq"]["minListing"]["dc"]["worldId"]),
-                ),
-            }
-        else:
-            self.soup["nq"] = None
-
-        # hq result
-        if len(row["hq"]["minListing"]) > 0:
-            self.soup["hq"] = {
-                "min": row["hq"]["minListing"]["dc"]["price"],
-                "world": self.world_dict.get(
-                    str(row["hq"]["minListing"]["dc"]["worldId"]),
-                    str(row["nq"]["minListing"]["dc"]["worldId"]),
-                ),
-            }
-        else:
-            self.soup["hq"] = None
 
 
 class ItemPrice:
@@ -157,7 +86,7 @@ class ItemPrice:
         """
         soup structure
         {
-            "name": str,
+            "id": str,
             "update_time": datetime,
             "dc_stats": {
                 "hq": {
@@ -208,7 +137,7 @@ class ItemPrice:
         }
         """
         # get item name
-        self.pre_soup["name"] = raw_data["itemID"]
+        self.pre_soup["id"] = raw_data["itemID"]
 
         # get update time
         self.pre_soup["update_time"] = raw_data["lastUploadTime"]

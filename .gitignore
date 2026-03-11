@@ -14,6 +14,7 @@ wheels/
 
 # tests
 test.py
+/test
 
 # dump files
 item.csv

@@ -1,13 +1,15 @@
 [project]
-name = "dev"
+name = "ffxiv"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
-    "aiohttp>=3.13.3",
+    "bidict>=0.23.1",
     "discord>=2.3.2",
-    "flask>=3.1.2",
-    "python-dotenv>=1.2.1",
-    "pytz>=2025.2",
+    "dotenv>=0.9.9",
+    "opencc>=1.2.0",
+    "pypinyin>=0.55.0",
+    "pytz>=2026.1.post1",
+    "rapidfuzz>=3.14.3",
 ]
