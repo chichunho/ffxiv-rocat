@@ -1,0 +1,34 @@
+[
+  {
+    "name": "0",
+    "status": "IDLE",
+    "operator_info": null,
+    "sail_info": null,
+    "note": "",
+    "followup_message_id": null
+  },
+  {
+    "name": "1",
+    "status": "IDLE",
+    "operator_info": null,
+    "sail_info": null,
+    "note": "",
+    "followup_message_id": null
+  },
+  {
+    "name": "2",
+    "status": "IDLE",
+    "operator_info": null,
+    "sail_info": null,
+    "note": "",
+    "followup_message_id": null
+  },
+  {
+    "name": "3",
+    "status": "IDLE",
+    "operator_info": null,
+    "sail_info": null,
+    "note": "",
+    "followup_message_id": null
+  }
+]

@@ -23,7 +23,7 @@ from typing import Iterable, Protocol
 from rapidfuzz import fuzz
 
 from market.enums import AdvancedSearchOption
-from market.model import ItemLike
+from itemdict.model import ItemLike
 from utils.orderedset import SimpleOrderedSet
 
 
@@ -112,10 +112,10 @@ class AdvancedCheck(Protocol):
 
 class Contains(AdvancedCheck):
     def __init__(self, keyword: ItemKeyword):
-        self.support_keywords = keyword.filter_words
+        self.filter_words = keyword.filter_words
 
     def __call__(self, candidate: ItemLike) -> bool:
-        for keyword in self.support_keywords:
+        for keyword in self.filter_words:
             if fuzz.partial_ratio(candidate.name, keyword) < 100:
                 return False
         return True

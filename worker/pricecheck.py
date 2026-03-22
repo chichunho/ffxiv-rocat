@@ -6,6 +6,9 @@ import discord
 
 from dcview.buy.dropdown import InfoButton, ItemDropdownView
 from dcview.buy.result import PriceResultView
+
+# from botview.buy_modal import BuyModalView
+# from botview.item_dropdown import ItemDropdownView
 from dcview.buy.search import BuyModalView
 from dcview.enums import ReplyOption
 from itemdict import ItemDict
@@ -99,14 +102,10 @@ class PriceChecker(Worker):
         loading_msg = await send_message(content="正在搜尋資料喵...")
 
         response_data = await self._fetch_item(self._make_api_params(target_item.code))
-        # if there is any http error, the response_data will be None
-        # but this should not means that the item id is invalid, because the item validation is done before
-
+        # embed_content = ItemPriceEmbed(response_data).message()
         info_btn = InfoButton()
-        if response_data is not None:
-            info_btn.update_url(self.item_dict.t2s(target_item).name)
-            info_btn.disabled = False
-
+        info_btn.update_url(self.item_dict.t2s(target_item).name)
+        info_btn.disabled = False
         buy_result_view = PriceResultView(response_data, info_btn)
 
         await loading_msg.delete()
@@ -142,10 +141,9 @@ class PriceChecker(Worker):
 
         return params
 
-    async def _fetch_item(self, api_params: dict[str, Any]) -> dict[str, Any]:
-        item_ids = api_params["item_ids"]
-        middleware = ItemPriceMiddle(item_ids, self.item_dict, self.world_dict, self.local_tz)
+    async def _fetch_item(self, api_params: dict[str, Any]):
+        target_item_id = api_params["item_ids"][0]
+        middleware = ItemPriceMiddle(target_item_id, self.item_dict, self.world_dict, self.local_tz)
 
         raw_data = await MarketClient(self.http_session).get_item_price(**api_params)
-
         return middleware(raw_data)

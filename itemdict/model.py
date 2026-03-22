@@ -1,9 +1,9 @@
 from functools import total_ordering
-from typing import NamedTuple, NewType, Protocol
+from typing import NamedTuple, Protocol
 
-ItemName = NewType("ItemName", str)
-ItemCode = NewType("ItemCode", str)
-ItemAliasName = NewType("ItemAliasName", str)
+type ItemName = str
+type ItemCode = str
+type ItemAliasName = str
 
 
 class Item(NamedTuple):

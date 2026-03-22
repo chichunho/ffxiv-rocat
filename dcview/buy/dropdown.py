@@ -1,15 +1,14 @@
-import discord
 from urllib.parse import quote as url_encode
 
-from market.itemdict import Item, ItemDict
-from market.model import ItemName
+import discord
+
+from itemdict import ItemDict
+from itemdict.model import Item, ItemName
 
 
 class ItemDropdown(discord.ui.Select):
     def __init__(self, items: list[Item]):
-        options = [
-            discord.SelectOption(label=item.name, value=item.code) for item in items
-        ]
+        options = [discord.SelectOption(label=item.name, value=item.code) for item in items]
         self.choices = {item.code: item.name for item in items}
 
         super().__init__(
@@ -41,6 +40,7 @@ class ConfirmButton(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
+        assert isinstance(self.view, ItemDropdownView)
         self.view.stop()
 
 
@@ -104,6 +104,7 @@ class ItemDropdownView(discord.ui.View):
         self.add_item(self.info_btn)
 
     def update_buttons_prop(self):
+        assert self.selected_item is not None
         self.info_btn.update_url(self.item_dict.t2s(self.selected_item).name)
         self.confirm_btn.disabled = False
         self.info_btn.disabled = False

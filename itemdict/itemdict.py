@@ -1,13 +1,15 @@
 import heapq
 from collections import UserDict
-from typing import Callable, Iterable
+from collections.abc import Callable, Iterable
+from typing import override
 
 from bidict import bidict
 from rapidfuzz import fuzz as fuzz
 from rapidfuzz.process import extract as fuzzy_extract
 from rapidfuzz.process import extract_iter as fuzzy_extract_iter
 
-from market.model import Item, ItemAliasName, ItemCode, ItemName, ScoredItem
+from itemdict.enums import DictScope
+from itemdict.model import Item, ItemAliasName, ItemCode, ItemName, ScoredItem
 from market.search import AdvancedChecker, AdvancedSearchOption, ItemKeyword
 from utils.orderedset import SimpleOrderedSet
 
@@ -17,7 +19,7 @@ class ItemDict(UserDict):
         self,
         default_dict: dict[ItemCode, ItemName],
         alias_dict: dict[ItemAliasName, ItemCode],
-        fuzzy_dict: dict[str, ItemName],
+        fuzzy_dict: dict[str, list[ItemCode]],
         sc_dict: dict[ItemCode, ItemName],
     ):
         self.data = default_dict
@@ -35,13 +37,11 @@ class ItemDict(UserDict):
         case_insensitive=False,
     ) -> Iterable[Item | ScoredItem]:
         if limit is None:
-            for _, score, code in fuzzy_extract_iter(keyword, self, score_cutoff=70):
+            for _, score, code in fuzzy_extract_iter(keyword, self, score_cutoff=60):
                 yield ScoredItem(
                     Item(
                         code,
-                        self.decode(code).lower()
-                        if case_insensitive
-                        else self.decode(code),
+                        self.decode(code).lower() if case_insensitive else self.decode(code),
                     ),
                     score,
                     len(keyword),
@@ -51,19 +51,17 @@ class ItemDict(UserDict):
                 [
                     Item(
                         code,
-                        self.decode(code).lower()
-                        if case_insensitive
-                        else self.decode(code),
+                        self.decode(code).lower() if case_insensitive else self.decode(code),
                     )
-                    for _, _, code in fuzzy_extract(
-                        keyword, self, limit=limit, score_cutoff=50
-                    )
+                    for _, _, code in fuzzy_extract(keyword, self, limit=limit, score_cutoff=50)
                 ]
             )
 
     @staticmethod
     def hill_ordered(
-        keyword_length: int, items: Iterable[Item], reverse=False
+        keyword_length: int,
+        items: Iterable[Item],
+        reverse=False,
     ) -> list[Item]:
         return sorted(
             items,
@@ -75,7 +73,8 @@ class ItemDict(UserDict):
             ),
         )
 
-    def items(self):
+    @override
+    def items(self):  # type: ignore
         yield from self.default_dict.items()
 
         for name, code in self.alias_dict.items():
@@ -92,19 +91,27 @@ class ItemDict(UserDict):
         check_options: Iterable[AdvancedSearchOption] | None = None,
     ) -> list[Item]:
         # fuzzy match
-        fuzzy_matches = []
+        fuzzy_matches: Iterable[Item] = []
         if check_options is None and len(keyword.filter_words) == 0:
             fuzzy_matches: Iterable[Item] = self._fuzzy_search(
-                keyword.master, limit=limit, case_insensitive=case_insensitive
-            )
+                keyword.master,
+                limit=limit,
+                case_insensitive=case_insensitive,
+            )  # type: ignore
         else:
             fuzzy_matches_iter: Iterable[ScoredItem] = self._fuzzy_search(
-                keyword.master, limit=None, case_insensitive=case_insensitive
-            )
-            checker = AdvancedChecker(keyword, check_options)
+                keyword.master,
+                limit=None,
+                case_insensitive=case_insensitive,
+            )  # type: ignore
+
+            checker = None if check_options is None else AdvancedChecker(keyword, check_options)
+
             fuzzy_middle: list[ScoredItem] = []
             for scored_item in fuzzy_matches_iter:
-                if not checker.check(scored_item):
+                assert isinstance(scored_item, ScoredItem)
+
+                if checker is not None and not checker.check(scored_item):
                     continue
                 if len(fuzzy_middle) < limit:
                     heapq.heappush(fuzzy_middle, scored_item)
@@ -160,14 +167,7 @@ class ItemDict(UserDict):
     def decode(self, code: ItemCode) -> ItemName:
         return self.default_dict[code]
 
-    def add_alias(
-        self,
-        item: Item,
-        alias_name: str,
-        wildcard_char="*",
-    ) -> tuple[bool, Item]:
-        if wildcard_char in alias_name:
-            return False, None
+    def add_alias(self, item: Item, alias_name: str) -> tuple[bool, Item]:
         if alias_name in self.default_dict.inverse:
             return False, Item(self.default_dict.inverse[alias_name], alias_name)
         if alias_name in self.alias_dict:
@@ -190,3 +190,14 @@ class ItemDict(UserDict):
 
     def t2s(self, item: Item) -> Item:
         return Item(item.code, self.sc_dict[item.code])
+
+    def contains(self, name: ItemName, scope: DictScope = DictScope.ALL):
+        match scope:
+            case DictScope.ALL:
+                return self.encode(name) is not None
+            case DictScope.ALIAS:
+                return name in self.alias_dict
+            case DictScope.FUZZY:
+                return name in self.fuzzy_dict
+            case DictScope.DEFAULT:
+                return name in self.default_dict or name in self.default_dict.inverse

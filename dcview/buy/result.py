@@ -1,6 +1,7 @@
 from typing import Any
 
 import discord
+
 from dcview.buy.dropdown import InfoButton
 
 
@@ -66,6 +67,10 @@ class PriceResultView(discord.ui.LayoutView):
 
         self.add_item(ReportHeader(soup["name"]))
         self.add_item(discord.ui.ActionRow(inherited_info_btn))
+        if len(soup["world_stats"]) == 0:
+            self.add_item(discord.ui.TextDisplay(content="市場上沒有人出售這個物品..."))
+            return
+
         self.add_item(EozeaReport(soup))
         for world_name, world_stat in soup["world_stats"].items():
             self.add_item(WorldReport(world_name, world_stat))

@@ -136,7 +136,8 @@ class ItemPrice:
             }
         }
         """
-        # get item name
+
+        # get item id
         self.pre_soup["id"] = raw_data["itemID"]
 
         # get update time

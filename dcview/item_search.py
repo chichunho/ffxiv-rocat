@@ -2,7 +2,7 @@ import discord
 
 from dcview.enums import ReplyOption
 from dcview.protocol import ItemSearchForm
-from market.itemdict import AdvancedSearchOption
+from market.enums import AdvancedSearchOption
 
 
 class ItemSearchView(discord.ui.Modal, ItemSearchForm):
