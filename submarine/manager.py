@@ -51,6 +51,13 @@ class Manager:
             and self.edit_locks[submarine.internal_index]["lock"].locked()
         ):
             return False
+        else:
+            lock = self.edit_locks[submarine.internal_index]["lock"]
+            assert isinstance(lock, asyncio.Lock)
+            try:
+                lock.release()
+            except RuntimeError:
+                pass
 
         async with self.edit_locks[submarine.internal_index]["lock"]:
             self.edit_locks[submarine.internal_index]["user"] = interaction_user
