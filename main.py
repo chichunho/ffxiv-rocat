@@ -184,6 +184,7 @@ class AraguBot(AraguBotBase):
 
     async def close(self):
         global bot_http_session
+        self.global_1h_clock.cancel()
         await bot_http_session.close()
         await super().close()
 
