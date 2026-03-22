@@ -35,7 +35,7 @@ class SailStarter(Worker):
         self.modal = None
 
     async def start(self):
-        self.modal = SailStartModal(self.cfg, self.sea_zh)
+        self.modal = SailStartModal(self.cfg, self.sea_zh, self.local_tz)
         await self.interaction.response.send_modal(self.modal)
         is_timeout = await self.modal.wait()
         if is_timeout:

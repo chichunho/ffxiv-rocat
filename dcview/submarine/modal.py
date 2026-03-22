@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, tzinfo
 
 import discord
 
@@ -48,13 +48,11 @@ class RouteTextInput(discord.ui.Label):
 
 
 class ReturnedDatetime(discord.ui.Label):
-    def __init__(self, default: datetime | None = None):
+    def __init__(self, default: datetime):
         super().__init__(
             text="返航時間",
             description="請根據遊戲內顯示的格式輸入",
-            component=discord.ui.TextInput(
-                default="" if default is None else default.strftime("%Y/%m/%d %H:%M")
-            ),
+            component=discord.ui.TextInput(default=default.strftime("%Y/%m/%d %H:%M")),
         )
 
 
@@ -71,12 +69,12 @@ class NoteTextInput(discord.ui.Label):
 
 
 class SailStartModal(discord.ui.Modal):
-    def __init__(self, cfg: ConfigManager, sea_zh: dict[str, str]):
+    def __init__(self, cfg: ConfigManager, sea_zh: dict[str, str], local_tz: tzinfo):
         super().__init__(title="登記出航", timeout=180)
 
         self.sea_dropdown = SeaDropDown(sea_zh)
         self.route_input = RouteTextInput()
-        self.return_input = ReturnedDatetime()
+        self.return_input = ReturnedDatetime(datetime.now(local_tz))
         self.note_input = NoteTextInput(cfg.note_template)
 
         self.add_item(self.sea_dropdown)
