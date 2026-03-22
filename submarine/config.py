@@ -23,6 +23,7 @@ class ConfigManager:
             json.dump(self.content, out_f, ensure_ascii=False)
 
     async def fetch_editors(self):
+        self.fetched_editors = []
         for uid in self.content["editors"]:
             try:
                 self.fetched_editors.append(await self.bot.fetch_user(uid))
