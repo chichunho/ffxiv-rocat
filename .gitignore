@@ -12,6 +12,10 @@ wheels/
 # secrets
 .env
 
+# private data files
+submarine/data/config.json
+submarine/data/state.json
+
 # tests
 test.py
 /test
@@ -21,3 +25,4 @@ item.csv
 soup.json
 dc_bot.drawio.png
 http.json
+
