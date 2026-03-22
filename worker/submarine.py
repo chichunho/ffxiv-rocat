@@ -248,21 +248,19 @@ class FollowupMessageWorkerGroup:
             self.smgr = smgr
 
         async def start(self):
-            assert self.submarine.followup_message_id is not None
-
             announce_channel = self.bot.get_partial_messageable(self.cid)
+
+            if self.submarine.followup_message_id is not None:
+                msg = discord.PartialMessage(
+                    channel=announce_channel,
+                    id=self.submarine.followup_message_id,
+                )
+
+                await msg.delete()
 
             await announce_channel.send(
                 content=self.cleaned_message,
                 delete_after=12 * 60 * 60,  # keep the clean notice for 12 hours
             )
-
-            msg = discord.PartialMessage(
-                channel=announce_channel,
-                id=self.submarine.followup_message_id,
-            )
-
-            await msg.delete()
-
             self.submarine.instance.followup_message_id = None
             self.smgr.dump()

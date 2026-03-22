@@ -11,7 +11,7 @@ class AnnounceChannelDropdown(discord.ui.Label):
                 component=discord.ui.ChannelSelect(
                     required=True,
                     placeholder="選擇公告頻道",
-                    channel_types=[discord.ChannelType.text],
+                    channel_types=[discord.ChannelType.text, discord.ChannelType.public_thread],
                 ),
             )
         else:
@@ -25,7 +25,7 @@ class AnnounceChannelDropdown(discord.ui.Label):
                             type=discord.SelectDefaultValueType.channel,
                         )
                     ],
-                    channel_types=[discord.ChannelType.text],
+                    channel_types=[discord.ChannelType.text, discord.ChannelType.public_thread],
                 ),
             )
 
