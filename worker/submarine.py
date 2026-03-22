@@ -39,7 +39,7 @@ class SailStarter(Worker):
         await self.interaction.response.send_modal(self.modal)
         is_timeout = await self.modal.wait()
         if is_timeout:
-            return
+            return None
 
         self.submarine.instance.status = Status.SAIL
 

@@ -288,6 +288,7 @@ class ConfigButton(discord.ui.Button):
             return
         next_worker = ConfigWorker(interaction, self.cfg)
         await next_worker.start()
+        await self.cfg.fetch_editors()
         await self.view.update()
 
 
