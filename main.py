@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import os
 from collections.abc import Awaitable, Callable
@@ -13,11 +15,14 @@ from base import AraguBotBase
 from dcview.submarine.infoboard import AfterSubmarineReturn, InfoBoardView
 from itemdict import ItemDict
 from itemdict.model import ItemAliasName, ItemCode, ItemName
-from submarine.config import ConfigManager
+from submarine.config import ConfigManager as SubmarineConfigManager
 from submarine.enums import Status as SubmarineStatus
-from submarine.manager import Manager as SubmarineManager
+from submarine.manager import SubmarineManager
 from submarine.parser import Dumper as SubmarineDumper
 from submarine.parser import Loader as SubmarineLoader
+from submarine.seadict import SeaDict
+from submarine.submarine import ManagedSubmarine
+from utils.cache import DiscordGuildCache
 from utils.countdown_task import CountdownTaskWrapper
 from worker.pricecheck import PriceChecker
 from worker.submarine import FollowupMessageWorkerGroup
@@ -25,6 +30,25 @@ from worker.submarine_info_board import InfoBoardDisplayer
 
 load_dotenv("test/.env")
 GUILDS = [discord.Object(guild) for guild in os.getenv("GUILD", "").split(",")]
+
+# global var
+
+# general
+local_tz: pytz.BaseTzInfo
+bot_http_session: HttpSession
+
+# market
+item_dict: ItemDict
+world_dict: dict[str, str]
+
+# submarine
+submarine_config: SubmarineConfigManager
+submarine_followup_workers: FollowupMessageWorkerGroup
+submarines: list[ManagedSubmarine]
+submarine_guild_cache: (
+    DiscordGuildCache | None
+)  # if init then no guild id -> no guild cache
+sea_zh: SeaDict
 
 
 class HttpSession:
@@ -39,11 +63,11 @@ class AraguBot(AraguBotBase):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
-        self.hour_coro_queue: list[Callable[[], Awaitable[None]]] = []
+        self.hour_coro_queue: dict[str, Callable[[], Awaitable[None]]] = {}
 
     @loop(hours=1, name="GLOBAL_1H_CLOCK")
     async def global_1h_clock(self):
-        for coro in self.hour_coro_queue:
+        for _, coro in self.hour_coro_queue.items():
             await coro()
 
     @global_1h_clock.before_loop
@@ -88,77 +112,66 @@ class AraguBot(AraguBotBase):
         local_tz = pytz.timezone("Asia/Taipei")
 
     async def setup_submarine(self):
+
+        # steps
+        # 1. load config.json
+        #   1.1 for init, no submarine data, no guild id, no infoboard, defer to the begin of command
+        #     1.1.1 skip reconnect infoboard
+        #     1.1.2 skip loader
+        # 2. load submarine state dumper
+        # 3. load guild cache for ui display name
+        #   3.1 for init, no guild id, defer to begin of command
+        # 4. load sea zh names
+        # 5. init submarine followup message work group
+        #   5.1 for init, no announce channel id, defer to begin of command
+
         global local_tz
 
         global submarine_config
-        submarine_config = ConfigManager("submarine/data/config.json", self)
-        await submarine_config.fetch_editors()
+        submarine_config = SubmarineConfigManager("submarine/data/config.json")
+
+        dumper = SubmarineDumper("submarine/data/state.json")
 
         global submarine_manager
-        loader = SubmarineLoader("submarine/data/state.json", self, local_tz)
-        dumper = SubmarineDumper("submarine/data/state.json")
-        submarine_manager = SubmarineManager(await loader.load(), dumper, self)
+        submarine_manager = SubmarineManager(self, dumper)
 
         global sea_zh
-        with open("submarine/data/zh.json", "r", encoding="utf-8") as in_f:
-            sea_zh = json.load(in_f)
+        with open("submarine/data/sea.json", "r", encoding="utf-8") as in_f:
+            sea_zh = SeaDict(json.load(in_f))
+
+        global submarine_guild_cache
+        submarine_guild_cache = None
+
+        global submarines
+        submarines = []
 
         global submarine_followup_workers
-        if submarine_config.announce_channel_id is not None:
-            submarine_followup_workers = FollowupMessageWorkerGroup(
-                self,
-                submarine_manager,
-                submarine_config,
+        if (
+            submarine_config.guild_id is not None
+            and submarine_config.announce_channel_id is not None
+        ):
+            submarine_guild_cache = DiscordGuildCache(
+                await self.fetch_guild(submarine_config.guild_id)
             )
+
+            loader = SubmarineLoader(
+                "submarine/data/state.json",
+                submarine_guild_cache,
+                local_tz,
+            )
+
+            for submarine in await loader.load():
+                submarines.append(submarine_manager.manage(submarine))
+
+            if submarine_config.announce_channel_id is not None:
+                submarine_followup_workers = FollowupMessageWorkerGroup(
+                    self,
+                    submarine_config,
+                )
 
     def setup_http_session(self):
         global bot_http_session
         bot_http_session = HttpSession()
-
-    async def reconnect_submarine_infoboard(self):
-        global submarine_manager, submarine_config, submarine_followup_workers
-        if (
-            submarine_config.infoboard_channel_id is None
-            or submarine_config.infoboard_message_id is None
-        ):
-            return
-
-        try:
-            infoboard_message = await discord.PartialMessage(
-                channel=bot.get_partial_messageable(submarine_config.infoboard_channel_id),
-                id=submarine_config.infoboard_message_id,
-            ).fetch()
-            infoboard = InfoBoardView(
-                submarine_manager,
-                submarine_config,
-                sea_zh,
-                local_tz,
-                has_submarine_edit_permission,
-                submarine_followup_workers,
-            )
-            infoboard.set_message(infoboard_message)
-            await infoboard.update()
-            bot.add_view(infoboard, message_id=infoboard_message.id)
-
-            # re-start the timer
-            for submarine in submarine_manager.submarines:
-                if submarine.status is SubmarineStatus.SAIL:
-                    submarine_manager.upsert_timer(
-                        submarine,
-                        AfterSubmarineReturn(
-                            infoboard,
-                            submarine,
-                            submarine_followup_workers,
-                        ).callback,
-                    )
-
-            # queue the loop regular update to 1 hour clock
-            self.hour_coro_queue.append(infoboard.update)
-
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-            # reset the config
-            submarine_config.infoboard_channel_id = None
-            submarine_config.infoboard_message_id = None
 
     async def setup_hook(self):
 
@@ -169,8 +182,6 @@ class AraguBot(AraguBotBase):
         self.setup_local_tz()
 
         await self.setup_submarine()
-
-        await self.reconnect_submarine_infoboard()
 
         self.setup_http_session()
 
@@ -193,6 +204,69 @@ intents = discord.Intents.default()
 intents.message_content = True
 
 bot = AraguBot(command_prefix=commands.when_mentioned_or("$"), intents=intents)
+
+
+async def reconnect_submarine_infoboard():
+    global \
+        bot, \
+        submarine_manager, \
+        submarine_config, \
+        submarine_followup_workers, \
+        submarines, \
+        submarine_guild_cache
+    if (
+        submarine_config.guild_id is None
+        or submarine_config.infoboard_channel_id is None
+        or submarine_config.infoboard_message_id is None
+    ):
+        return
+
+    # if guild id is not none, then the cache object is init in the setup hook
+    assert submarine_guild_cache is not None
+
+    try:
+        infoboard_message = await discord.PartialMessage(
+            channel=bot.get_partial_messageable(submarine_config.infoboard_channel_id),
+            id=submarine_config.infoboard_message_id,
+        ).fetch()
+        infoboard = InfoBoardView(
+            submarines,
+            submarine_config,
+            sea_zh,
+            local_tz,
+            has_submarine_edit_permission,
+            submarine_followup_workers,
+            submarine_guild_cache,
+        )
+        infoboard.set_message(infoboard_message)
+        bot.add_view(infoboard, message_id=infoboard_message.id)
+
+        # re-start the timer
+        for submarine in submarines:
+            if submarine.status is SubmarineStatus.SAIL:
+                submarine_manager.upsert_timer(
+                    submarine,
+                    AfterSubmarineReturn(
+                        infoboard,
+                        submarine,
+                        submarine_followup_workers,
+                    ).callback,
+                )
+
+        await infoboard.update()
+
+        # queue the loop regular update to 1 hour clock
+        bot.hour_coro_queue["submarine_regular_update"] = infoboard.update
+
+    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+        # reset the config
+        submarine_config.infoboard_channel_id = None
+        submarine_config.infoboard_message_id = None
+
+
+@bot.event
+async def on_ready():
+    await reconnect_submarine_infoboard()
 
 
 async def from_others(ctx: commands.Context):
@@ -230,11 +304,15 @@ async def alias(ctx: commands.Context, item_name, item_nickname):
     #     await ctx.send(f"{item_nickname} is an alias of item {item_dict[item_nickname]}")
 
 
-@bot.tree.command(guilds=GUILDS, name="ffxiv-market-buy", description="亞拉戈機械貓 - 繁中市場查價")
+@bot.tree.command(
+    guilds=GUILDS, name="ffxiv-market-buy", description="亞拉戈機械貓 - 繁中市場查價"
+)
 async def buy(interaction: discord.Interaction):
     global item_dict, world_dict, bot_http_session, local_tz
 
-    worker = PriceChecker(interaction, item_dict, world_dict, bot_http_session, local_tz)
+    worker = PriceChecker(
+        interaction, item_dict, world_dict, bot_http_session, local_tz
+    )
     await worker.start()
 
 
@@ -251,9 +329,11 @@ async def buy(interaction: discord.Interaction):
 #     await worker.start()
 
 
-async def has_submarine_edit_permission(interaction_user: discord.User | discord.Member):
+async def has_submarine_edit_permission(
+    interaction_user: discord.User | discord.Member,
+):
     global submarine_config
-    whitelist: list[int] = submarine_config.editors
+    whitelist: set[int] = submarine_config.editor_ids
     return await bot.is_owner(interaction_user) or interaction_user.id in whitelist
 
 
@@ -263,33 +343,58 @@ async def has_submarine_edit_permission(interaction_user: discord.User | discord
     description="亞拉戈機械貓 - 公會潛水艇",
 )
 async def connect_submarine_infoboard(interaction: discord.Interaction):
-    global submarine_manager, sea_zh, local_tz, submarine_config, submarine_followup_workers
+    global \
+        bot, \
+        submarine_manager, \
+        sea_zh, \
+        local_tz, \
+        submarine_config, \
+        submarine_followup_workers, \
+        submarine_guild_cache, \
+        submarines
 
     # for init.
     if (
         submarine_config.infoboard_channel_id is None
         or submarine_config.infoboard_message_id is None
+        or submarine_config.guild_id is None
     ):
         # the interaction should never from DM
         assert interaction.channel is not None
+        assert interaction.guild is not None
 
+        submarine_config.guild_id = interaction.guild.id
         submarine_config.announce_channel_id = interaction.channel.id
         submarine_config.dump()
 
+        submarine_guild_cache = DiscordGuildCache(
+            await bot.fetch_guild(submarine_config.guild_id)
+        )
+
+        loader = SubmarineLoader(
+            "submarine/data/state.json",
+            submarine_guild_cache,
+            local_tz,
+        )
+
+        submarines = []
+        for submarine in await loader.load():
+            submarines.append(submarine_manager.manage(submarine))
+
         submarine_followup_workers = FollowupMessageWorkerGroup(
             bot,
-            submarine_manager,
             submarine_config,
         )
 
         worker = InfoBoardDisplayer(
             interaction,
-            submarine_manager,
+            submarines,
             submarine_config,
             sea_zh,
             local_tz,
             has_submarine_edit_permission,
             submarine_followup_workers,
+            submarine_guild_cache,
         )
         await worker.start()
 
@@ -297,12 +402,13 @@ async def connect_submarine_infoboard(interaction: discord.Interaction):
         bot.add_view(worker.view, message_id=submarine_config.infoboard_message_id)
 
         # queue the loop regular update to 1 hour clock
-        bot.hour_coro_queue.append(worker.view.update)
+        bot.hour_coro_queue["submarine_regular_update"] = worker.view.update
 
         return
 
-    # in case the user call the command when there is a existing infoboard
-    # send them a url jump link
+    assert submarine_guild_cache is not None
+    # in case the user call the command when there should be a existing infoboard
+    # if the message can be found, send them a url jump link
     # there maybe a case that the message is deleted, if true then recreate the infoboard
     try:
         infoboard_message = await discord.PartialMessage(
@@ -313,31 +419,33 @@ async def connect_submarine_infoboard(interaction: discord.Interaction):
         # in case the message is not exist, create a new message
         worker = InfoBoardDisplayer(
             interaction,
-            submarine_manager,
+            submarines,
             submarine_config,
             sea_zh,
             local_tz,
             has_submarine_edit_permission,
             submarine_followup_workers,
+            submarine_guild_cache,
         )
         await worker.start()
 
         assert worker.view is not None
         bot.add_view(worker.view, message_id=submarine_config.infoboard_message_id)
 
-        # queue the loop regular update to 1 hour clock
-        bot.hour_coro_queue.append(worker.view.update)
+        # update the clock
+        bot.hour_coro_queue["submarine_regular_update"] = worker.view.update
 
         return
 
     # if the message can be found, send the message url
     infoboard = InfoBoardView(
-        submarine_manager,
+        submarines,
         submarine_config,
         sea_zh,
         local_tz,
         has_submarine_edit_permission,
         submarine_followup_workers,
+        submarine_guild_cache,
     )
     infoboard.set_message(infoboard_message)
     bot.add_view(infoboard, message_id=infoboard_message.id)

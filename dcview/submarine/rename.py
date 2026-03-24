@@ -1,11 +1,12 @@
+from collections.abc import Sequence
+
 import discord
 
-from submarine.manager import Manager
-from submarine.model import ManagedSubmarine
+from submarine.base import SubmarineLike
 
 
 class NameTextInput(discord.ui.Label):
-    def __init__(self, n: int, submarine: ManagedSubmarine):
+    def __init__(self, n: int, submarine: SubmarineLike):
         super().__init__(
             text=f"#{n} 潛艇",
             component=discord.ui.TextInput(default=submarine.name),
@@ -13,11 +14,11 @@ class NameTextInput(discord.ui.Label):
 
 
 class RenameModal(discord.ui.Modal):
-    def __init__(self, smgr: Manager):
+    def __init__(self, submarines: Sequence[SubmarineLike]):
         super().__init__(title="潛艇重新命名", timeout=180)
 
         self._submarine_names: list[NameTextInput] = []
-        for idx, submarine in enumerate(smgr.submarines, start=1):
+        for idx, submarine in enumerate(submarines, start=1):
             sname = NameTextInput(idx, submarine)
             self._submarine_names.append(sname)
             self.add_item(sname)

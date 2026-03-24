@@ -13,21 +13,17 @@ from utils.countdown_task import CountdownTaskWrapper
 
 
 class SubmarineManager(SubmarineManagerBase):
-    def __init__(self, bot: AraguBotBase, dumper: Dumper):
+    def __init__(self, fp: str, bot: AraguBotBase, dumper: Dumper):
+        self.fp = fp
         self.bot = bot
         self.dumper = dumper
 
         self._submarine: list[Submarine] = []
         self.timers: list[asyncio.Task | None] = []
 
-    @property
-    def submarines(self) -> list[Submarine]:
-        return self._submarine
-
     def manage(self, submarine: Submarine) -> ManagedSubmarine:
-        man_sub = ManagedSubmarine(self, submarine, len(self._submarine))
         self._submarine.append(submarine)
-        self.timers.append(None)
+        man_sub = ManagedSubmarine(self, submarine, len(self._submarine))
         return man_sub
 
     def dump(self):

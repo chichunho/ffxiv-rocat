@@ -1,93 +1,117 @@
 from collections.abc import Callable
-from datetime import tzinfo
 
 import discord
+from pytz import BaseTzInfo
 
 from base import AraguBotBase
 from dcview.submarine.config import ConfigModal
 from dcview.submarine.modal import SailEditModal, SailStartModal
 from dcview.submarine.rename import RenameModal
 from submarine.config import ConfigManager
-from submarine.enums import Sea, Status
-from submarine.manager import Manager
-from submarine.model import ManagedSubmarine, OperatorInfo, SailInfo
-from worker.worker import Worker
+from submarine.enums import Status
+from submarine.model import FollowupMessage, OperatorInfo, SailInfo
+from submarine.seadict import SeaDict
+from submarine.submarine import ManagedSubmarine
+from utils.cache import DiscordGuildCache
+from worker.worker import Cancellable, Worker
 
 
-class SailStarter(Worker):
+class SailStarter(Worker, Cancellable):
     def __init__(
         self,
         interaction: discord.Interaction,
         submarine: ManagedSubmarine,
-        smgr: Manager,
         cfg: ConfigManager,
-        sea_zh: dict[str, str],
-        local_tz: tzinfo,
+        sea_zh: SeaDict,
+        local_tz: BaseTzInfo,
         after_countdown: list[Callable],
     ):
         self.interaction = interaction
         self.submarine = submarine
-        self.smgr = smgr
         self.cfg = cfg
         self.sea_zh = sea_zh
         self.local_tz = local_tz
         self.after_countdown = after_countdown
-        self.modal = None
+        self.modal: SailStartModal | None = None
 
     async def start(self):
         self.modal = SailStartModal(self.cfg, self.sea_zh, self.local_tz)
         await self.interaction.response.send_modal(self.modal)
         is_timeout = await self.modal.wait()
-        if is_timeout:
-            return None
+        if is_timeout or self.modal.is_cancelled:
+            return
 
-        self.submarine.instance.status = Status.SAIL
+        # the interatcion must come from the guild
+        assert isinstance(self.interaction.user, discord.Member)
 
-        self.submarine.instance.operator_info = OperatorInfo(self.interaction.user, None)
-        self.submarine.instance.sail_info = SailInfo(
-            Sea(self.modal.sea),
-            self.modal.route,
-            self.modal.end_dt.astimezone(self.local_tz),
-        )
-        self.submarine.instance.note = self.modal.note
+        with self.submarine.update_ctx():
+            self.submarine.replace(
+                status=Status.SAIL,
+                operator_info=OperatorInfo(
+                    self.interaction.user,
+                    None,
+                ),
+                sail_info=SailInfo(
+                    self.modal.sea,
+                    self.modal.route,
+                    self.modal.return_dt,
+                ),
+                note=self.modal.note,
+            )
 
-        self.smgr.upsert_timer(self.submarine, self.after_countdown)
+        self.submarine.upsert_return_countdown(self.after_countdown)
+
+    def cancel(self):
+        if self.modal is not None:
+            self.modal.cancel()
 
 
-class SailEditor(Worker):
+class SailEditor(Worker, Cancellable):
     def __init__(
         self,
         interaction: discord.Interaction,
         submarine: ManagedSubmarine,
-        smgr: Manager,
-        sea_zh: dict[str, str],
+        seadict: SeaDict,
+        local_tz: BaseTzInfo,
         after_countdown: list[Callable],
     ):
         self.interaction = interaction
         self.submarine = submarine
-        self.smgr = smgr
-        self.sea_zh = sea_zh
+        self.seadict = seadict
+        self.local_tz = local_tz
         self.after_countdown = after_countdown
 
+        self.modal: SailEditModal | None = None
+
     async def start(self):
-        sail_modal = SailEditModal(self.sea_zh, self.submarine)
-        await self.interaction.response.send_modal(sail_modal)
-        is_timeout = await sail_modal.wait()
-        if is_timeout:
+        self.modal = SailEditModal(self.seadict, self.submarine, self.local_tz)
+        await self.interaction.response.send_modal(self.modal)
+        is_timeout = await self.modal.wait()
+        if is_timeout or self.modal.is_cancelled:
             return
 
-        assert self.submarine.instance.operator_info is not None
-        self.submarine.instance.operator_info.editor = self.interaction.user
+        assert self.submarine.operator_info is not None
+        assert isinstance(self.interaction.user, discord.Member)
+        assert self.submarine.sail_info is not None
 
-        assert self.submarine.instance.sail_info is not None
-        self.submarine.instance.sail_info.sea = Sea(sail_modal.sea)
-        self.submarine.instance.sail_info.route = sail_modal.route
-        self.submarine.instance.sail_info.return_dt = sail_modal.end_dt.astimezone(
-            tz=self.submarine.instance.sail_info.return_dt.tzinfo
-        )
-        self.submarine.instance.note = sail_modal.note
+        with self.submarine.update_ctx():
+            self.submarine.replace(
+                operator_info=OperatorInfo(
+                    self.submarine.operator_info.operator, self.interaction.user
+                ),
+                sail_info=SailInfo(
+                    self.modal.sea,
+                    self.modal.route,
+                    self.modal.return_dt,
+                ),
+                note=self.modal.note,
+            )
 
-        self.smgr.upsert_timer(self.submarine, self.after_countdown)
+        self.submarine.upsert_return_countdown(self.after_countdown)
+
+    def cancel(self):
+        if self.modal is not None:
+            self.modal.cancel()
 
 
 class ReturnChecker(Worker):
@@ -98,7 +122,8 @@ class ReturnChecker(Worker):
         self.submarine = submarine
 
     async def start(self):
-        self.submarine.instance.status = Status.RETURNED
+        with self.submarine.update_ctx():
+            self.submarine.replace(status=Status.RETURNED)
 
 
 class ConfirmChecker(Worker):
@@ -109,10 +134,9 @@ class ConfirmChecker(Worker):
         self.submarine = submarine
 
     async def start(self):
-        self.submarine.instance.status = Status.IDLE
-
-        self.submarine.instance.operator_info = None
-        self.submarine.instance.sail_info = None
+        with self.submarine.update_ctx():
+            self.submarine.clear(operator_info=True, sail_info=True)
+            self.submarine.replace(status=Status.IDLE)
 
 
 class CancelChecker(Worker):
@@ -120,20 +144,17 @@ class CancelChecker(Worker):
         self,
         interaction: discord.Interaction,
         submarine: ManagedSubmarine,
-        smgr: Manager,
     ):
         self.interaction = interaction
         self.submarine = submarine
-        self.smgr = smgr
 
     async def start(self):
         await self.interaction.response.defer()
 
-        self.submarine.instance.status = Status.IDLE
-
-        self.submarine.instance.operator_info = None
-        self.submarine.instance.sail_info = None
-        self.smgr.cancel_timer(self.submarine)
+        with self.submarine.update_ctx():
+            self.submarine.clear(operator_info=True, sail_info=True)
+            self.submarine.replace(status=Status.IDLE)
+            self.submarine.cancel_return_countdown()
 
 
 class ConfigWorker(Worker):
@@ -141,19 +162,22 @@ class ConfigWorker(Worker):
         self,
         interaction: discord.Interaction,
         cfg: ConfigManager,
+        guild_cache: DiscordGuildCache,
     ):
         self.interaction = interaction
         self.cfg = cfg
+        self.guild_cache = guild_cache
 
     async def start(self):
-        config_modal = ConfigModal(self.cfg)
+        editors = await self.guild_cache.get_memebers(self.cfg.editor_ids)
+        config_modal = ConfigModal(self.cfg, editors)
         await self.interaction.response.send_modal(config_modal)
         is_timeout = await config_modal.wait()
         if is_timeout:
             return
 
-        self.cfg.announce_channel_id = config_modal.channel
-        self.cfg.editors = config_modal.editors
+        self.cfg.announce_channel_id = config_modal.channel_id
+        self.cfg.editor_ids = config_modal.editor_ids
         self.cfg.note_template = config_modal.note_template
         self.cfg.dump()
 
@@ -162,30 +186,49 @@ class RenameWorker(Worker):
     def __init__(
         self,
         interaction: discord.Interaction,
-        smgr: Manager,
+        submarines: list[ManagedSubmarine],
     ):
         self.interaction = interaction
-        self.smgr = smgr
+        self.submarines = submarines
 
     async def start(self):
-        rename_modal = RenameModal(self.smgr)
+
+        rename_modal = RenameModal(self.submarines)
         await self.interaction.response.send_modal(rename_modal)
         is_timeout = await rename_modal.wait()
         if is_timeout:
             return
 
-        self.smgr.rename_all(rename_modal.submarine_names)
+        # use a hack to reduce the file I/O
+        # since all 4 submarine states are stored in a single file
+        # if dump them seperately it will produce 4 I/O cost
+        # however if we sure that 4 submarine are managed by the same manager (which it should be)
+        # we can directly dump once by calling submarine.manager.dump
+        shared_man = self.submarines[0].manager
+        for submarine in self.submarines:
+            if submarine.manager is not shared_man:
+                shared_man = None
+                break
+
+        if shared_man is not None:
+            for idx, new_name in enumerate(rename_modal.submarine_names):
+                self.submarines[idx].replace(name=new_name)
+            shared_man.dump()
+        else:
+            for new_name, submarine in zip(
+                rename_modal.submarine_names, self.submarines
+            ):
+                with submarine.update_ctx():
+                    submarine.replace(name=new_name)
 
 
 class FollowupMessageWorkerGroup:
     def __init__(
         self,
         bot: AraguBotBase,
-        submarine_manager: Manager,
         cfg: ConfigManager,
     ):
         self.bot = bot
-        self.smgr = submarine_manager
         self.cfg = cfg
 
     def get_writer(self, message: str, submarine: ManagedSubmarine):
@@ -194,11 +237,13 @@ class FollowupMessageWorkerGroup:
             self.cfg,
             message,
             submarine,
-            self.smgr,
         )
 
     def get_cleaner(
-        self, interaction: discord.Interaction, submarine: ManagedSubmarine, cleaned_message: str
+        self,
+        interaction: discord.Interaction,
+        submarine: ManagedSubmarine,
+        cleaned_message: str,
     ):
         return FollowupMessageWorkerGroup.Cleaner(
             interaction,
@@ -206,7 +251,6 @@ class FollowupMessageWorkerGroup:
             self.cfg,
             cleaned_message,
             submarine,
-            self.smgr,
         )
 
     class Writer(Worker):
@@ -216,19 +260,21 @@ class FollowupMessageWorkerGroup:
             cfg: ConfigManager,
             message: str,
             submarine: ManagedSubmarine,
-            smgr: Manager,
         ):
             self.bot = bot
+            # the announce channel is at least the default -> the command init channel, should not be None
+            assert cfg.announce_channel_id is not None
             self.cid = cfg.announce_channel_id
             self.message = message
             self.submarine = submarine
-            self.smgr = smgr
 
         async def start(self):
             announce_channel = self.bot.get_partial_messageable(self.cid)
             msg = await announce_channel.send(content=self.message)
-            self.submarine.instance.followup_message_id = msg.id
-            self.smgr.dump()
+            with self.submarine.update_ctx():
+                self.submarine.replace(
+                    followup_message=FollowupMessage(msg.channel.id, msg.id)
+                )
 
     class Cleaner(Worker):
         def __init__(
@@ -238,22 +284,26 @@ class FollowupMessageWorkerGroup:
             cfg: ConfigManager,
             cleaned_message: str,
             submarine: ManagedSubmarine,
-            smgr: Manager,
         ):
             self.interaction = interaction
             self.bot = bot
-            self.cid = cfg.announce_channel_id
+            # the followup message is sent, the announce channel should not be None
+            self.cfg = cfg
             self.cleaned_message = cleaned_message
             self.submarine = submarine
-            self.smgr = smgr
 
         async def start(self):
-            announce_channel = self.bot.get_partial_messageable(self.cid)
+            assert self.cfg.announce_channel_id is not None
+            announce_channel = self.bot.get_partial_messageable(
+                self.cfg.announce_channel_id
+            )
 
-            if self.submarine.followup_message_id is not None:
+            if self.submarine.followup_message is not None:
                 msg = discord.PartialMessage(
-                    channel=announce_channel,
-                    id=self.submarine.followup_message_id,
+                    channel=self.bot.get_partial_messageable(
+                        self.submarine.followup_message.channel_id
+                    ),
+                    id=self.submarine.followup_message.message_id,
                 )
 
                 await msg.delete()
@@ -262,5 +312,6 @@ class FollowupMessageWorkerGroup:
                 content=self.cleaned_message,
                 delete_after=12 * 60 * 60,  # keep the clean notice for 12 hours
             )
-            self.submarine.instance.followup_message_id = None
-            self.smgr.dump()
+
+            with self.submarine.update_ctx():
+                self.submarine.clear(followup_message=True)

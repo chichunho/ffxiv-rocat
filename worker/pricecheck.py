@@ -1,8 +1,8 @@
-from datetime import tzinfo
 from functools import partial
 from typing import Any
 
 import discord
+from pytz import BaseTzInfo
 
 from dcview.buy.dropdown import InfoButton, ItemDropdownView
 from dcview.buy.result import PriceResultView
@@ -26,7 +26,7 @@ class PriceChecker(Worker):
         item_dict: ItemDict,
         world_dict: dict[str, str],
         http_session: Any,
-        local_tz: tzinfo,
+        local_tz: BaseTzInfo,
     ):
         self.interaction = interaction
         self.item_dict = item_dict
@@ -59,7 +59,9 @@ class PriceChecker(Worker):
             items = self.item_dict.search(
                 keyword,
                 check_options=check_options,
-                case_insensitive=(AdvancedSearchOption.OPT_CASE_INSENSITIVE in check_options),
+                case_insensitive=(
+                    AdvancedSearchOption.OPT_CASE_INSENSITIVE in check_options
+                ),
             )
 
             # single match treat as perfect match
@@ -143,7 +145,9 @@ class PriceChecker(Worker):
 
     async def _fetch_item(self, api_params: dict[str, Any]):
         target_item_id = api_params["item_ids"][0]
-        middleware = ItemPriceMiddle(target_item_id, self.item_dict, self.world_dict, self.local_tz)
+        middleware = ItemPriceMiddle(
+            target_item_id, self.item_dict, self.world_dict, self.local_tz
+        )
 
         raw_data = await MarketClient(self.http_session).get_item_price(**api_params)
         return middleware(raw_data)

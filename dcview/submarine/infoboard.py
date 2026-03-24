@@ -1,14 +1,17 @@
 import math
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timedelta, tzinfo
+from datetime import datetime, timedelta
 
 import discord
 import pytz
+from pytz import BaseTzInfo
 
+from submarine.base import SubmarineLike
 from submarine.config import ConfigManager
 from submarine.enums import Status
-from submarine.manager import Manager as SubmarineManager
-from submarine.model import ManagedSubmarine, SubmarineLike
+from submarine.seadict import SeaDict
+from submarine.submarine import ManagedSubmarine
+from utils.cache import DiscordGuildCache
 from worker.submarine import (
     CancelChecker,
     ConfigWorker,
@@ -27,13 +30,13 @@ class SubmarineName(discord.ui.TextDisplay):
 
 
 class SailInfoDisplay(discord.ui.TextDisplay):
-    def __init__(self, submarine: SubmarineLike, sea_zh: dict[str, str]):
+    def __init__(self, submarine: SubmarineLike, sea_zh: SeaDict):
         assert submarine.sail_info is not None
 
         time_left = submarine.sail_info.return_dt - datetime.now(pytz.utc)
         content = "\n".join(
             [
-                f"海域: {sea_zh.get(submarine.sail_info.sea.value, 'N/A')}",
+                f"海域: {sea_zh.get_zh_name(submarine.sail_info.sea)}",
                 f"航線: {' ➡️ '.join(submarine.sail_info.route)}",
                 f"返航時間: {submarine.sail_info.return_dt.strftime('%m-%d %H:%M')}",
                 f"剩餘時間: {'---' if submarine.status is Status.RETURNED else SailInfoDisplay.transform_timedelta(time_left)}",
@@ -49,7 +52,9 @@ class SailInfoDisplay(discord.ui.TextDisplay):
             tds = ""
             d = math.floor(td / timedelta(days=1))
             h = math.floor((td - timedelta(days=d)) / timedelta(hours=1))
-            m = math.ceil((td - timedelta(days=d) - timedelta(hours=h)) / timedelta(minutes=1))
+            m = math.ceil(
+                (td - timedelta(days=d) - timedelta(hours=h)) / timedelta(minutes=1)
+            )
             if d > 0:
                 tds += f"{d} 天 "
             if h > 0 or (d > 0 and m > 0):
@@ -81,10 +86,9 @@ class PublishButton(discord.ui.Button):
     def __init__(
         self,
         submarine: ManagedSubmarine,
-        smgr: SubmarineManager,
         cfg: ConfigManager,
-        sea_zh: dict[str, str],
-        local_tz: tzinfo,
+        sea_zh: SeaDict,
+        local_tz: BaseTzInfo,
         fmsg_workers: FollowupMessageWorkerGroup,
     ):
         super().__init__(
@@ -94,18 +98,17 @@ class PublishButton(discord.ui.Button):
             custom_id=f"ARAGU.Submarine.PublishButton.{submarine.name}",
         )
         self.submarine = submarine
-        self.smgr = smgr
         self.cfg = cfg
         self.sea_zh = sea_zh
         self.local_tz = local_tz
         self.fmsg_workers = fmsg_workers
 
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        assert isinstance(self.view, InfoBoardView)
+        return await self.view.permission_check(interaction.user)
+
     async def callback(self, interaction: discord.Interaction):
         assert isinstance(self.view, InfoBoardView)
-
-        if not await self.view.permission_check(interaction.user):
-            await interaction.response.defer()
-            return
 
         after_countdown = AfterSubmarineReturn(
             self.view,
@@ -116,15 +119,15 @@ class PublishButton(discord.ui.Button):
         next_worker = SailStarter(
             interaction,
             self.submarine,
-            self.smgr,
             self.cfg,
             self.sea_zh,
             self.local_tz,
             after_countdown,
         )
-        is_accepted = await self.smgr.exclusive_update(
+
+        assert isinstance(interaction.user, discord.Member)
+        is_accepted = await self.submarine.exclusive_update(
             interaction.user,
-            self.submarine,
             next_worker,
         )
         if not is_accepted:
@@ -141,8 +144,8 @@ class EditButton(discord.ui.Button):
     def __init__(
         self,
         submarine: ManagedSubmarine,
-        smgr: SubmarineManager,
-        sea_zh: dict[str, str],
+        sea_zh: SeaDict,
+        local_tz: BaseTzInfo,
         fmsg_workers: FollowupMessageWorkerGroup,
     ):
         super().__init__(
@@ -152,16 +155,16 @@ class EditButton(discord.ui.Button):
             custom_id=f"ARAGU.Submarine.EditButton.{submarine.name}",
         )
         self.submarine = submarine
-        self.smgr = smgr
         self.sea_zh = sea_zh
+        self.local_tz = local_tz
         self.fmsg_workers = fmsg_workers
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        assert isinstance(self.view, InfoBoardView)
+        return await self.view.permission_check(interaction.user)
 
     async def callback(self, interaction: discord.Interaction):
         assert isinstance(self.view, InfoBoardView)
-
-        if not await self.view.permission_check(interaction.user):
-            await interaction.response.defer()
-            return
 
         after_countdown = AfterSubmarineReturn(
             self.view,
@@ -172,13 +175,14 @@ class EditButton(discord.ui.Button):
         next_worker = SailEditor(
             interaction,
             self.submarine,
-            self.smgr,
             self.sea_zh,
+            self.local_tz,
             after_countdown,
         )
-        is_accepted = await self.smgr.exclusive_update(
+
+        assert isinstance(interaction.user, discord.Member)
+        is_accepted = await self.submarine.exclusive_update(
             interaction.user,
-            self.submarine,
             next_worker,
         )
         if not is_accepted:
@@ -191,25 +195,28 @@ class EditButton(discord.ui.Button):
 
 
 class CancelButton(discord.ui.Button):
-    def __init__(self, submarine: ManagedSubmarine, smgr: SubmarineManager):
+    def __init__(self, submarine: ManagedSubmarine):
         super().__init__(
             style=discord.ButtonStyle.danger,
             label="取消",
             emoji="❌",
             custom_id=f"ARAGU.Submarine.CancelButton.{submarine.name}",
         )
+
         self.submarine = submarine
-        self.smgr = smgr
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        assert isinstance(self.view, InfoBoardView)
+        return await self.view.permission_check(interaction.user)
 
     async def callback(self, interaction: discord.Interaction):
         assert isinstance(self.view, InfoBoardView)
-        if not await self.view.permission_check(interaction.user):
-            await interaction.response.defer()
-            return
-        next_worker = CancelChecker(interaction, self.submarine, self.smgr)
-        is_accepted = await self.smgr.exclusive_update(
+
+        next_worker = CancelChecker(interaction, self.submarine)
+
+        assert isinstance(interaction.user, discord.Member)
+        is_accepted = await self.submarine.exclusive_update(
             interaction.user,
-            self.submarine,
             next_worker,
         )
         if not is_accepted:
@@ -225,7 +232,6 @@ class FinishButton(discord.ui.Button):
     def __init__(
         self,
         submarine: ManagedSubmarine,
-        smgr: SubmarineManager,
         fmsg_workers: FollowupMessageWorkerGroup,
     ):
         super().__init__(
@@ -235,18 +241,20 @@ class FinishButton(discord.ui.Button):
             custom_id=f"ARAGU.Submarine.FinishButton.{submarine.name}",
         )
         self.submarine = submarine
-        self.smgr = smgr
         self.fmsg_workers = fmsg_workers
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        assert isinstance(self.view, InfoBoardView)
+        return await self.view.permission_check(interaction.user)
 
     async def callback(self, interaction: discord.Interaction):
         assert isinstance(self.view, InfoBoardView)
-        if not await self.view.permission_check(interaction.user):
-            await interaction.response.defer()
-            return
+
         next_worker = ConfirmChecker(self.submarine)
-        is_accepted = await self.smgr.exclusive_update(
+
+        assert isinstance(interaction.user, discord.Member)
+        is_accepted = await self.submarine.exclusive_update(
             interaction.user,
-            self.submarine,
             next_worker,
         )
         if not is_accepted:
@@ -269,8 +277,8 @@ class FinishButton(discord.ui.Button):
 class ConfigButton(discord.ui.Button):
     def __init__(
         self,
-        smgr: SubmarineManager,
         cfg: ConfigManager,
+        guild_cache: DiscordGuildCache,
     ):
         super().__init__(
             label="設定",
@@ -278,17 +286,18 @@ class ConfigButton(discord.ui.Button):
             custom_id="ARAGU.Submarine.ConfigButton",
         )
 
-        self.smgr = smgr
         self.cfg = cfg
+        self.guild_cache = guild_cache
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        assert isinstance(self.view, InfoBoardView)
+        return await self.view.permission_check(interaction.user)
 
     async def callback(self, interaction: discord.Interaction):
         assert isinstance(self.view, InfoBoardView)
-        if not await self.view.permission_check(interaction.user):
-            await interaction.response.defer()
-            return
-        next_worker = ConfigWorker(interaction, self.cfg)
+
+        next_worker = ConfigWorker(interaction, self.cfg, self.guild_cache)
         await next_worker.start()
-        await self.cfg.fetch_editors()
         await self.view.update()
 
 
@@ -308,7 +317,7 @@ class RefreshViewButton(discord.ui.Button):
 
 
 class RenameButton(discord.ui.Button):
-    def __init__(self, smgr):
+    def __init__(self, submarines: list[ManagedSubmarine]):
         super().__init__(
             style=discord.ButtonStyle.grey,
             label="潛艇命名",
@@ -316,14 +325,16 @@ class RenameButton(discord.ui.Button):
             custom_id="ARAGU.Submarine.RenameButton",
         )
 
-        self.smgr = smgr
+        self.submarines = submarines
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        assert isinstance(self.view, InfoBoardView)
+        return await self.view.permission_check(interaction.user)
 
     async def callback(self, interaction):
         assert isinstance(self.view, InfoBoardView)
-        if not await self.view.permission_check(interaction.user):
-            await interaction.response.defer()
-            return
-        next_worker = RenameWorker(interaction, self.smgr)
+
+        next_worker = RenameWorker(interaction, self.submarines)
         await next_worker.start()
         await self.view.update()
 
@@ -332,16 +343,15 @@ class IdleLayout(discord.ui.Container):
     def __init__(
         self,
         submarine: ManagedSubmarine,
-        smgr: SubmarineManager,
         cfg: ConfigManager,
-        sea_zh: dict[str, str],
-        local_tz: tzinfo,
+        sea_zh: SeaDict,
+        local_tz: BaseTzInfo,
         fmsg_workers: FollowupMessageWorkerGroup,
     ):
         super().__init__(accent_colour=discord.Colour.ash_embed())
 
         self.title = SubmarineName(submarine.name)
-        self.publish_btn = PublishButton(submarine, smgr, cfg, sea_zh, local_tz, fmsg_workers)
+        self.publish_btn = PublishButton(submarine, cfg, sea_zh, local_tz, fmsg_workers)
 
         self.add_item(self.title)
         self.add_item(discord.ui.Separator())
@@ -356,8 +366,8 @@ class SailLayout(discord.ui.Container):
     def __init__(
         self,
         submarine: ManagedSubmarine,
-        smgr: SubmarineManager,
-        sea_zh: dict[str, str],
+        sea_zh: SeaDict,
+        local_tz: BaseTzInfo,
         fmsg_workers: FollowupMessageWorkerGroup,
     ):
         super().__init__(accent_colour=discord.Colour.blue())
@@ -372,8 +382,8 @@ class SailLayout(discord.ui.Container):
 
         self.note = NoteDisplay(submarine)
 
-        self.edit_btn = EditButton(submarine, smgr, sea_zh, fmsg_workers)
-        self.cancel_btn = CancelButton(submarine, smgr)
+        self.edit_btn = EditButton(submarine, sea_zh, local_tz, fmsg_workers)
+        self.cancel_btn = CancelButton(submarine)
 
         self.add_item(self.sail_info)
         self.add_item(self.user_info)
@@ -394,8 +404,7 @@ class ReturnedLayout(discord.ui.Container):
     def __init__(
         self,
         submarine: ManagedSubmarine,
-        smgr: SubmarineManager,
-        sea_zh: dict[str, str],
+        sea_zh: SeaDict,
         fmsg_workers: FollowupMessageWorkerGroup,
     ):
         super().__init__(accent_colour=discord.Colour.brand_green())
@@ -417,23 +426,24 @@ class ReturnedLayout(discord.ui.Container):
             self.add_item(self.note)
             self.add_item(discord.ui.Separator())
 
-        self.finish_btn = FinishButton(submarine, smgr, fmsg_workers)
+        self.finish_btn = FinishButton(submarine, fmsg_workers)
         self.add_item(discord.ui.ActionRow(self.finish_btn))
 
 
 class InfoBoardView(discord.ui.LayoutView):
     def __init__(
         self,
-        submarine_manager: SubmarineManager,
+        submarines: list[ManagedSubmarine],
         submarine_config: ConfigManager,
-        sea_zh: dict[str, str],
-        local_tz: tzinfo,
+        sea_zh: SeaDict,
+        local_tz: BaseTzInfo,
         permission_check: Callable[[discord.User | discord.Member], Awaitable[bool]],
         fmsg_workers: FollowupMessageWorkerGroup,
+        guild_cache: DiscordGuildCache,
     ):
         super().__init__(timeout=None)
 
-        self.smgr = submarine_manager
+        self.submarines = submarines
         self.cfg = submarine_config
         self.sea_zh = sea_zh
         self.local_tz = local_tz
@@ -441,8 +451,8 @@ class InfoBoardView(discord.ui.LayoutView):
         self.fmsg_workers = fmsg_workers
 
         self.refresh_btn = RefreshViewButton()
-        self.config_btn = ConfigButton(submarine_manager, submarine_config)
-        self.rename_btn = RenameButton(submarine_manager)
+        self.config_btn = ConfigButton(submarine_config, guild_cache)
+        self.rename_btn = RenameButton(submarines)
         self.create_board()
 
     def create_board(self):
@@ -456,13 +466,12 @@ class InfoBoardView(discord.ui.LayoutView):
 
         self.add_item(discord.ui.Separator())
 
-        for submarine in self.smgr.submarines:
+        for submarine in self.submarines:
             match submarine.status:
                 case Status.IDLE:
                     self.add_item(
                         IdleLayout(
                             submarine,
-                            self.smgr,
                             self.cfg,
                             self.sea_zh,
                             self.local_tz,
@@ -473,8 +482,8 @@ class InfoBoardView(discord.ui.LayoutView):
                     self.add_item(
                         SailLayout(
                             submarine,
-                            self.smgr,
                             self.sea_zh,
+                            self.local_tz,
                             self.fmsg_workers,
                         )
                     )
@@ -482,7 +491,6 @@ class InfoBoardView(discord.ui.LayoutView):
                     self.add_item(
                         ReturnedLayout(
                             submarine,
-                            self.smgr,
                             self.sea_zh,
                             self.fmsg_workers,
                         )
@@ -510,10 +518,10 @@ class AfterSubmarineReturn:
     @property
     def callback(self) -> list[Callable[[], Awaitable[None]]]:
         writer = self.fmsg_workers.get_writer(
-            f"潛水艇 {self.submarine.name} 已經返回, 請檢查收穫!",
+            f"潛水艇 **{self.submarine.name}** 已經返回, 請檢查收穫!",
             self.submarine,
         )
-        return [ReturnChecker(self.submarine).start, self.view.update, writer.start]
+        return [writer.start, ReturnChecker(self.submarine).start, self.view.update]
 
 
 class RegularInfoBoardUpdate:
