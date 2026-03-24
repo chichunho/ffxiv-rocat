@@ -20,6 +20,13 @@ class ItemSearchForm(Protocol):
     def reply_option(self) -> ReplyOption: ...
 
 
+class Cancellable(Protocol):
+    def cancel(self): ...
+
+    @property
+    def is_cancelled(self) -> bool: ...
+
+
 class ForwardInteraction:
     def forward(self, interaction: discord.Interaction):
         self._next_interaction = interaction
