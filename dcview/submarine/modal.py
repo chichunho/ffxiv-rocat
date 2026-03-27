@@ -10,6 +10,7 @@ from submarine.config import ConfigManager
 from submarine.enums import Sea
 from submarine.seadict import SeaDict
 from submarine.submarine import ManagedSubmarine
+from utils.datetime import datetime2timedelta, timedelta2datetime
 
 
 class SeaDropDown(discord.ui.Label):
@@ -53,11 +54,11 @@ class RouteTextInput(discord.ui.Label):
 
 
 class ReturnedDatetime(discord.ui.Label):
-    def __init__(self, default: datetime):
+    def __init__(self, default: str):
         super().__init__(
-            text="返航時間",
-            description="請根據遊戲內顯示的格式輸入",
-            component=discord.ui.TextInput(default=default.strftime("%Y/%m/%d %H:%M")),
+            text="返航耗時",
+            description="請根據 天,小時,分鐘 的格式輸入, 沒有天數時可省略, 例如 20 小時 34 分鐘, 則輸入 20,34",
+            component=discord.ui.TextInput(default=default),
         )
 
 
@@ -80,14 +81,14 @@ class SailStartModal(discord.ui.Modal, Cancellable):
         seadict: SeaDict,
         local_tz: BaseTzInfo,
     ):
-        super().__init__(title="登記出航", timeout=180)
+        super().__init__(title="登記出航", timeout=600)
 
         self.seadict = seadict
         self.local_tz = local_tz
 
         self.sea_dropdown = SeaDropDown(seadict)
         self.route_input = RouteTextInput()
-        self.return_input = ReturnedDatetime(datetime.now(local_tz))
+        self.return_input = ReturnedDatetime("")
         self.note_input = NoteTextInput(cfg.note_template)
 
         self._is_cancelled = False
@@ -117,7 +118,7 @@ class SailStartModal(discord.ui.Modal, Cancellable):
 
     @property
     def return_dt(self) -> AwaredDatetime:
-        return self.local_tz.localize(self.tf_return_input)
+        return self.tf_return_input
 
     @property
     def note(self) -> str:
@@ -125,25 +126,24 @@ class SailStartModal(discord.ui.Modal, Cancellable):
         return self.note_input.component.value
 
     async def on_submit(self, interaction: discord.Interaction):
-        try:
-            assert isinstance(self.return_input.component, discord.ui.TextInput)
-            self.tf_return_input = datetime.strptime(
-                self.return_input.component.value.strip(), "%Y/%m/%d %H:%M"
-            )
-        except ValueError:
+        assert isinstance(self.return_input.component, discord.ui.TextInput)
+        dt = timedelta2datetime(self.return_input.component.value, self.local_tz)
+        if dt is None:
             await interaction.response.send_message(
-                content="返航時間輸入格式有誤",
+                content="返航耗時輸入格式有誤",
                 ephemeral=True,
             )
             self.cancel()
             return
 
-        if self.return_dt <= datetime.now(pytz.utc):
+        if dt <= datetime.now(pytz.utc):
             await interaction.response.send_message(
                 "返航時間不能早於或等於目前時間", ephemeral=True
             )
             self.cancel()
             return
+
+        self.tf_return_input = dt
 
         for node in self.route:
             if not self.seadict.is_node(node, Sea(self.sea)):
@@ -161,18 +161,20 @@ class SailEditModal(discord.ui.Modal, Cancellable):
     def __init__(
         self, seadict: SeaDict, submarine: ManagedSubmarine, local_tz: BaseTzInfo
     ):
-        super().__init__(title="編輯航行資料", timeout=60)
+        super().__init__(title="編輯航行資料", timeout=300)
 
         assert submarine.sail_info is not None
 
         self.seadict = seadict
         self.local_tz = local_tz
 
+        d, h, m = datetime2timedelta(submarine.sail_info.return_dt)
+
         self.sea_dropdown = SeaDropDown(seadict, default=submarine.sail_info.sea)
 
         self.route_input = RouteTextInput(default=submarine.sail_info.route)
 
-        self.return_input = ReturnedDatetime(default=submarine.sail_info.return_dt)
+        self.return_input = ReturnedDatetime(default=",".join([str(d), str(h), str(m)]))
 
         self.note_input = NoteTextInput(submarine.note)
 
@@ -211,25 +213,24 @@ class SailEditModal(discord.ui.Modal, Cancellable):
         return self.note_input.component.value
 
     async def on_submit(self, interaction: discord.Interaction):
-        try:
-            assert isinstance(self.return_input.component, discord.ui.TextInput)
-            self.tf_return_input = datetime.strptime(
-                self.return_input.component.value.strip(), "%Y/%m/%d %H:%M"
-            )
-        except ValueError:
+        assert isinstance(self.return_input.component, discord.ui.TextInput)
+        dt = timedelta2datetime(self.return_input.component.value, self.local_tz)
+        if dt is None:
             await interaction.response.send_message(
-                content="返航時間輸入格式有誤",
+                content="返航耗時輸入格式有誤",
                 ephemeral=True,
             )
             self.cancel()
             return
 
-        if self.return_dt <= datetime.now(pytz.utc):
+        if dt <= datetime.now(pytz.utc):
             await interaction.response.send_message(
                 "返航時間不能早於或等於目前時間", ephemeral=True
             )
             self.cancel()
             return
+
+        self.tf_return_input = dt
 
         for node in self.route:
             if not self.seadict.is_node(node, Sea(self.sea)):

@@ -42,3 +42,4 @@ class ExclusiveAsyncLock:
     lock: asyncio.Lock
     owner: discord.Member | None
     worker: Worker | None
+    acquire_dt: datetime | None

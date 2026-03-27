@@ -2,6 +2,7 @@ from collections.abc import Iterable
 
 import discord
 
+from dcview.protocol import Cancellable
 from submarine.config import ConfigManager
 
 
@@ -64,11 +65,12 @@ class NoteTemplate(discord.ui.Label):
         )
 
 
-class ConfigModal(discord.ui.Modal):
+class ConfigModal(discord.ui.Modal, Cancellable):
     def __init__(self, cfg: ConfigManager, editors: Iterable[discord.Member]):
         super().__init__(title="功能設定", timeout=180)
 
         self.cfg = cfg
+        self._is_cancelled = False
 
         self._remind_channel_dropdown = AnnounceChannelDropdown(cfg.announce_channel_id)
         self.add_item(self._remind_channel_dropdown)
@@ -81,6 +83,14 @@ class ConfigModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer()
+
+    def cancel(self):
+        self.stop()
+        self._is_cancelled = True
+
+    @property
+    def is_cancelled(self) -> bool:
+        return self._is_cancelled
 
     @property
     def channel_id(self) -> int:

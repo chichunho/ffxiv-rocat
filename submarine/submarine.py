@@ -1,8 +1,10 @@
 import asyncio
 from collections.abc import Awaitable, Callable
 from contextlib import contextmanager
+from datetime import datetime, timedelta
 
 import discord
+import pytz
 
 from submarine.base import (
     ManagedSubmarineBase,
@@ -25,13 +27,15 @@ class ManagedSubmarine(ManagedSubmarineBase):
         manager: SubmarineManagerBase,
         submarine: Submarine,
         internal_index: int,
+        lock_threshold: timedelta = timedelta(seconds=300),
     ):
         self._manager = manager
         self._submarine = submarine
         self._internal_index = internal_index
+        self.lock_threshold = lock_threshold
 
         # exclusive update
-        self.lock_state = ExclusiveAsyncLock(asyncio.Lock(), None, None)
+        self.lock_state = ExclusiveAsyncLock(asyncio.Lock(), None, None, None)
 
     @property
     def manager(self) -> SubmarineManagerBase:
@@ -113,36 +117,40 @@ class ManagedSubmarine(ManagedSubmarineBase):
         owner: discord.Member,
         worker: Worker,
     ) -> bool:
-        if (
-            self.lock_state.lock.locked()
-            and self.lock_state.owner is not None
-            and owner.id != self.lock_state.owner.id
-        ):
-            return False
+        if self.lock_state.lock.locked():
+            if (
+                self.lock_state.owner is not None
+                and owner.id != self.lock_state.owner.id
+                and self.lock_state.acquire_dt is not None
+                and (
+                    self.lock_state.acquire_dt - datetime.now(pytz.utc)
+                    < self.lock_threshold
+                )
+            ):
+                return False
 
-        # the lock can be locked or idled
-        # the interatcion user is the lock owner, if there is worker working, try to cancel it
+            # we are going to release the lock
 
-        if (
-            self.lock_state.lock.locked()
-            and self.lock_state.worker is not None
-            and isinstance(self.lock_state.worker, CancellableWorker)
-        ):
-            self.lock_state.worker.cancel()
+            if self.lock_state.worker is not None and isinstance(
+                self.lock_state.worker, CancellableWorker
+            ):
+                self.lock_state.worker.cancel()
+
             try:
                 self.lock_state.lock.release()
             except RuntimeError:
-                return False
+                pass
 
         async with self.lock_state.lock:
             self.lock_state.owner = owner
             self.lock_state.worker = worker
+            self.lock_state.acquire_dt = datetime.now(pytz.utc)
 
             await worker.start()
-            self.manager.dump()
 
             self.lock_state.owner = None
             self.lock_state.worker = None
+            self.lock_state.acquire_dt = None
 
         return True
 

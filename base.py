@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Awaitable, Callable
 from typing import Protocol
 
 import discord
@@ -14,4 +15,11 @@ class CountdownTaskHandler(Protocol):
     ) -> asyncio.Task: ...
 
 
-class AraguBotBase(BotBase, discord.Client, CountdownTaskHandler): ...
+class AraguBotBase(BotBase, discord.Client, CountdownTaskHandler):
+    async def upsert_scheduled_job(
+        self,
+        job_id: str,
+        coro: Callable[[], Awaitable[None]],
+    ) -> None: ...
+
+    async def cancel_schedule_job(self, job_id: str) -> None: ...

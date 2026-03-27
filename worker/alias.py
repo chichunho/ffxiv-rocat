@@ -1,4 +1,3 @@
-from datetime import tzinfo
 from typing import Any
 
 import discord
@@ -25,7 +24,7 @@ class AliasValidator(Worker):
         val_modal = ValidateView()
         await self.interaction.response.send_modal(val_modal)
         is_timeout = await val_modal.wait()
-        self.interaction.delete_original_response()
+        await self.interaction.delete_original_response()
         if is_timeout:
             return
 
@@ -86,7 +85,9 @@ class AliasAdder(Worker):
         items = self.item_dict.search(
             keyword,
             check_options=check_options,
-            case_insensitive=(AdvancedSearchOption.OPT_CASE_INSENSITIVE in check_options),
+            case_insensitive=(
+                AdvancedSearchOption.OPT_CASE_INSENSITIVE in check_options
+            ),
         )
 
         add_alias_view = AddAliasView(items)

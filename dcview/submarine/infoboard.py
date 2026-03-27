@@ -1,6 +1,5 @@
-import math
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import discord
 import pytz
@@ -9,9 +8,11 @@ from pytz import BaseTzInfo
 from submarine.base import SubmarineLike
 from submarine.config import ConfigManager
 from submarine.enums import Status
+from submarine.manager import SubmarineManager
 from submarine.seadict import SeaDict
 from submarine.submarine import ManagedSubmarine
 from utils.cache import DiscordGuildCache
+from utils.datetime import datetime2timedelta
 from worker.submarine import (
     CancelChecker,
     ConfigWorker,
@@ -34,35 +35,29 @@ class SailInfoDisplay(discord.ui.TextDisplay):
         assert submarine.sail_info is not None
 
         time_left = submarine.sail_info.return_dt - datetime.now(pytz.utc)
+        d, h, m = datetime2timedelta(submarine.sail_info.return_dt)
+        tds = []
+        if time_left.total_seconds() <= 0:
+            tds = ["---"]
+        else:
+            if d > 0:
+                tds.append(f"{d} 天")
+            if h > 0 or (d > 0 and m > 0):
+                tds.append(f"{h} 小時")
+            if m > 0:
+                tds.append(f"{m} 分鐘")
+            if d == 0 and h == 0 and m == 0:
+                tds = ["少於 1 分鐘"]
+
         content = "\n".join(
             [
                 f"海域: {sea_zh.get_zh_name(submarine.sail_info.sea)}",
                 f"航線: {' ➡️ '.join(submarine.sail_info.route)}",
                 f"返航時間: {submarine.sail_info.return_dt.strftime('%m-%d %H:%M')}",
-                f"剩餘時間: {'---' if submarine.status is Status.RETURNED else SailInfoDisplay.transform_timedelta(time_left)}",
+                f"剩餘時間: {'---' if submarine.status is Status.RETURNED else ' '.join(tds)}",
             ]
         )
         super().__init__(content=content)
-
-    @staticmethod
-    def transform_timedelta(td: timedelta):
-        if td.total_seconds() <= 0:
-            return "---"
-        else:
-            tds = ""
-            d = math.floor(td / timedelta(days=1))
-            h = math.floor((td - timedelta(days=d)) / timedelta(hours=1))
-            m = math.ceil(
-                (td - timedelta(days=d) - timedelta(hours=h)) / timedelta(minutes=1)
-            )
-            if d > 0:
-                tds += f"{d} 天 "
-            if h > 0 or (d > 0 and m > 0):
-                tds += f"{h} 小時 "
-            if m > 0:
-                tds += f"{m} 分鐘"
-
-            return tds.strip()
 
 
 class OperatorInfoDisplay(discord.ui.TextDisplay):
@@ -185,6 +180,7 @@ class EditButton(discord.ui.Button):
             interaction.user,
             next_worker,
         )
+
         if not is_accepted:
             await interaction.response.send_message(
                 content="有其他人正在更新此潛艇, 請稍後再試",
@@ -355,6 +351,9 @@ class IdleLayout(discord.ui.Container):
 
         self.add_item(self.title)
         self.add_item(discord.ui.Separator())
+        if len(submarine.note) > 0:
+            self.add_item(NoteDisplay(submarine))
+            self.add_item(discord.ui.Separator())
         self.add_item(
             discord.ui.ActionRow(
                 self.publish_btn,
@@ -433,7 +432,7 @@ class ReturnedLayout(discord.ui.Container):
 class InfoBoardView(discord.ui.LayoutView):
     def __init__(
         self,
-        submarines: list[ManagedSubmarine],
+        smgr: SubmarineManager,
         submarine_config: ConfigManager,
         sea_zh: SeaDict,
         local_tz: BaseTzInfo,
@@ -443,7 +442,7 @@ class InfoBoardView(discord.ui.LayoutView):
     ):
         super().__init__(timeout=None)
 
-        self.submarines = submarines
+        self.smgr = smgr
         self.cfg = submarine_config
         self.sea_zh = sea_zh
         self.local_tz = local_tz
@@ -452,7 +451,7 @@ class InfoBoardView(discord.ui.LayoutView):
 
         self.refresh_btn = RefreshViewButton()
         self.config_btn = ConfigButton(submarine_config, guild_cache)
-        self.rename_btn = RenameButton(submarines)
+        self.rename_btn = RenameButton(smgr.managed_submarines)
         self.create_board()
 
     def create_board(self):
@@ -466,7 +465,7 @@ class InfoBoardView(discord.ui.LayoutView):
 
         self.add_item(discord.ui.Separator())
 
-        for submarine in self.submarines:
+        for submarine in self.smgr.managed_submarines:
             match submarine.status:
                 case Status.IDLE:
                     self.add_item(

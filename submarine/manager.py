@@ -19,14 +19,12 @@ class SubmarineManager(SubmarineManagerBase):
 
         self._submarine: list[Submarine] = []
         self.timers: list[asyncio.Task | None] = []
-
-    @property
-    def submarines(self) -> list[Submarine]:
-        return self._submarine
+        self.managed_submarines: list[ManagedSubmarine] = []
 
     def manage(self, submarine: Submarine) -> ManagedSubmarine:
         man_sub = ManagedSubmarine(self, submarine, len(self._submarine))
         self._submarine.append(submarine)
+        self.managed_submarines.append(man_sub)
         self.timers.append(None)
         return man_sub
 

@@ -13,10 +13,10 @@ from submarine.model import FollowupMessage, OperatorInfo, SailInfo
 from submarine.seadict import SeaDict
 from submarine.submarine import ManagedSubmarine
 from utils.cache import DiscordGuildCache
-from worker.worker import Cancellable, Worker
+from worker.worker import CancellableWorker, Worker
 
 
-class SailStarter(Worker, Cancellable):
+class SailStarter(CancellableWorker):
     def __init__(
         self,
         interaction: discord.Interaction,
@@ -66,7 +66,7 @@ class SailStarter(Worker, Cancellable):
             self.modal.cancel()
 
 
-class SailEditor(Worker, Cancellable):
+class SailEditor(CancellableWorker):
     def __init__(
         self,
         interaction: discord.Interaction,
@@ -157,7 +157,7 @@ class CancelChecker(Worker):
             self.submarine.cancel_return_countdown()
 
 
-class ConfigWorker(Worker):
+class ConfigWorker(CancellableWorker):
     def __init__(
         self,
         interaction: discord.Interaction,
@@ -170,19 +170,23 @@ class ConfigWorker(Worker):
 
     async def start(self):
         editors = await self.guild_cache.get_memebers(self.cfg.editor_ids)
-        config_modal = ConfigModal(self.cfg, editors)
-        await self.interaction.response.send_modal(config_modal)
-        is_timeout = await config_modal.wait()
-        if is_timeout:
+        self.modal = ConfigModal(self.cfg, editors)
+        await self.interaction.response.send_modal(self.modal)
+        is_timeout = await self.modal.wait()
+        if is_timeout or self.modal.is_cancelled:
             return
 
-        self.cfg.announce_channel_id = config_modal.channel_id
-        self.cfg.editor_ids = config_modal.editor_ids
-        self.cfg.note_template = config_modal.note_template
+        self.cfg.announce_channel_id = self.modal.channel_id
+        self.cfg.editor_ids = self.modal.editor_ids
+        self.cfg.note_template = self.modal.note_template
         self.cfg.dump()
 
+    def cancel(self):
+        if self.modal is not None:
+            self.modal.cancel()
 
-class RenameWorker(Worker):
+
+class RenameWorker(CancellableWorker):
     def __init__(
         self,
         interaction: discord.Interaction,
@@ -193,10 +197,10 @@ class RenameWorker(Worker):
 
     async def start(self):
 
-        rename_modal = RenameModal(self.submarines)
-        await self.interaction.response.send_modal(rename_modal)
-        is_timeout = await rename_modal.wait()
-        if is_timeout:
+        self.modal = RenameModal(self.submarines)
+        await self.interaction.response.send_modal(self.modal)
+        is_timeout = await self.modal.wait()
+        if is_timeout or self.modal.is_cancelled:
             return
 
         # use a hack to reduce the file I/O
@@ -211,15 +215,17 @@ class RenameWorker(Worker):
                 break
 
         if shared_man is not None:
-            for idx, new_name in enumerate(rename_modal.submarine_names):
+            for idx, new_name in enumerate(self.modal.submarine_names):
                 self.submarines[idx].replace(name=new_name)
             shared_man.dump()
         else:
-            for new_name, submarine in zip(
-                rename_modal.submarine_names, self.submarines
-            ):
+            for new_name, submarine in zip(self.modal.submarine_names, self.submarines):
                 with submarine.update_ctx():
                     submarine.replace(name=new_name)
+
+    def cancel(self):
+        if self.modal is not None:
+            self.modal.cancel()
 
 
 class FollowupMessageWorkerGroup:
@@ -262,19 +268,29 @@ class FollowupMessageWorkerGroup:
             submarine: ManagedSubmarine,
         ):
             self.bot = bot
-            # the announce channel is at least the default -> the command init channel, should not be None
-            assert cfg.announce_channel_id is not None
-            self.cid = cfg.announce_channel_id
+            self.cfg = cfg
             self.message = message
             self.submarine = submarine
 
         async def start(self):
-            announce_channel = self.bot.get_partial_messageable(self.cid)
-            msg = await announce_channel.send(content=self.message)
-            with self.submarine.update_ctx():
-                self.submarine.replace(
-                    followup_message=FollowupMessage(msg.channel.id, msg.id)
-                )
+            # the announce channel is at least the default -> the command init channel, should not be None
+            assert self.cfg.announce_channel_id is not None
+            announce_channel = self.bot.get_partial_messageable(
+                self.cfg.announce_channel_id
+            )
+
+            try:
+                msg = await announce_channel.send(content=self.message)
+
+                with self.submarine.update_ctx():
+                    self.submarine.replace(
+                        followup_message=FollowupMessage(msg.channel.id, msg.id)
+                    )
+
+            except (discord.NotFound, discord.HTTPException, discord.Forbidden) as e:
+                print(e)
+                pass
+                # if the message failed to send, just ignore it
 
     class Cleaner(Worker):
         def __init__(
@@ -293,25 +309,36 @@ class FollowupMessageWorkerGroup:
             self.submarine = submarine
 
         async def start(self):
-            assert self.cfg.announce_channel_id is not None
-            announce_channel = self.bot.get_partial_messageable(
-                self.cfg.announce_channel_id
-            )
+            try:
+                if self.submarine.followup_message is not None:
+                    msg = discord.PartialMessage(
+                        channel=self.bot.get_partial_messageable(
+                            self.submarine.followup_message.channel_id
+                        ),
+                        id=self.submarine.followup_message.message_id,
+                    )
 
-            if self.submarine.followup_message is not None:
-                msg = discord.PartialMessage(
-                    channel=self.bot.get_partial_messageable(
-                        self.submarine.followup_message.channel_id
-                    ),
-                    id=self.submarine.followup_message.message_id,
+                    await msg.delete()
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException) as e:
+                print(e)
+                pass
+                # if the followup messsage actions failed, it does not affect the main control flow,
+                # afterall, the message can be deleted by guild admin
+
+            try:
+                assert self.cfg.announce_channel_id is not None
+                announce_channel = self.bot.get_partial_messageable(
+                    self.cfg.announce_channel_id
                 )
-
-                await msg.delete()
-
-            await announce_channel.send(
-                content=self.cleaned_message,
-                delete_after=12 * 60 * 60,  # keep the clean notice for 12 hours
-            )
+                await announce_channel.send(
+                    content=self.cleaned_message,
+                    delete_after=12 * 60 * 60,  # keep the clean notice for 12 hours
+                )
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException) as e:
+                print(e)
+                pass
+                # this does not affect the main control flow,
+                # the missing message can be entered manually
 
             with self.submarine.update_ctx():
                 self.submarine.clear(followup_message=True)
