@@ -6,18 +6,9 @@ from datetime import datetime, timedelta
 import discord
 import pytz
 
-from submarine.base import (
-    ManagedSubmarineBase,
-    SubmarineManagerBase,
-)
+from submarine.base import ManagedSubmarineBase, SubmarineManagerBase
 from submarine.enums import Status
-from submarine.model import (
-    ExclusiveAsyncLock,
-    FollowupMessage,
-    OperatorInfo,
-    SailInfo,
-    Submarine,
-)
+from submarine.model import ExclusiveAsyncLock, FollowupMessage, OperatorInfo, SailInfo, Submarine
 from worker.worker import CancellableWorker, Worker
 
 
@@ -27,7 +18,7 @@ class ManagedSubmarine(ManagedSubmarineBase):
         manager: SubmarineManagerBase,
         submarine: Submarine,
         internal_index: int,
-        lock_threshold: timedelta = timedelta(seconds=300),
+        lock_threshold: timedelta = timedelta(seconds=180),
     ):
         self._manager = manager
         self._submarine = submarine
@@ -92,9 +83,7 @@ class ManagedSubmarine(ManagedSubmarineBase):
         self.submarine.operator_info = operator_info or self.submarine.operator_info
         self.submarine.sail_info = sail_info or self.submarine.sail_info
         self.submarine.note = note or self.submarine.note
-        self.submarine.followup_message = (
-            followup_message or self.submarine.followup_message
-        )
+        self.submarine.followup_message = followup_message or self.submarine.followup_message
 
     def clear(
         self,
@@ -103,9 +92,7 @@ class ManagedSubmarine(ManagedSubmarineBase):
         note: bool = False,
         followup_message: bool = False,
     ):
-        self.submarine.operator_info = (
-            None if operator_info else self.submarine.operator_info
-        )
+        self.submarine.operator_info = None if operator_info else self.submarine.operator_info
         self.submarine.sail_info = None if sail_info else self.submarine.sail_info
         self.submarine.note = "" if note else self.submarine.note
         self.submarine.followup_message = (
@@ -122,10 +109,7 @@ class ManagedSubmarine(ManagedSubmarineBase):
                 self.lock_state.owner is not None
                 and owner.id != self.lock_state.owner.id
                 and self.lock_state.acquire_dt is not None
-                and (
-                    self.lock_state.acquire_dt - datetime.now(pytz.utc)
-                    < self.lock_threshold
-                )
+                and (self.lock_state.acquire_dt - datetime.now(pytz.utc) < self.lock_threshold)
             ):
                 return False
 
