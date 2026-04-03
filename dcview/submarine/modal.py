@@ -53,13 +53,18 @@ class RouteTextInput(discord.ui.Label):
         )
 
 
-class ReturnedDatetime(discord.ui.Label):
+class ReturnDatetimeDeltaInput(discord.ui.Label):
     def __init__(self, default: str):
         super().__init__(
             text="返航耗時",
             description="請根據 天,小時,分鐘 的格式輸入, 沒有天數時可省略, 例如 20 小時 34 分鐘, 則輸入 20,34",
             component=discord.ui.TextInput(default=default),
         )
+
+
+class NewDatetimeDeltaCheckbox(discord.ui.Label):
+    def __init__(self):
+        super().__init__(text="採用新耗時", component=discord.ui.Checkbox())
 
 
 class NoteTextInput(discord.ui.Label):
@@ -88,7 +93,7 @@ class SailStartModal(discord.ui.Modal, Cancellable):
 
         self.sea_dropdown = SeaDropDown(seadict)
         self.route_input = RouteTextInput()
-        self.return_input = ReturnedDatetime("")
+        self.return_input = ReturnDatetimeDeltaInput("")
         self.note_input = NoteTextInput(cfg.note_template)
 
         self._is_cancelled = False
@@ -165,6 +170,9 @@ class SailEditModal(discord.ui.Modal, Cancellable):
 
         self.seadict = seadict
         self.local_tz = local_tz
+        self.submarine = submarine
+
+        self._return_datetime_snap = submarine.sail_info.return_dt
 
         d, h, m = datetime2timedelta(submarine.sail_info.return_dt)
 
@@ -172,7 +180,9 @@ class SailEditModal(discord.ui.Modal, Cancellable):
 
         self.route_input = RouteTextInput(default=submarine.sail_info.route)
 
-        self.return_input = ReturnedDatetime(default=",".join([str(d), str(h), str(m)]))
+        self.return_input = ReturnDatetimeDeltaInput(default=",".join([str(d), str(h), str(m)]))
+
+        self.new_td_check = NewDatetimeDeltaCheckbox()
 
         self.note_input = NoteTextInput(submarine.note)
 
@@ -181,6 +191,7 @@ class SailEditModal(discord.ui.Modal, Cancellable):
         self.add_item(self.sea_dropdown)
         self.add_item(self.route_input)
         self.add_item(self.return_input)
+        self.add_item(self.new_td_check)
         self.add_item(self.note_input)
 
     def cancel(self):
@@ -203,12 +214,22 @@ class SailEditModal(discord.ui.Modal, Cancellable):
 
     @property
     def return_dt(self) -> AwaredDatetime:
-        return self.tf_return_input
+        assert isinstance(self.new_td_check.component, discord.ui.Checkbox)
+        assert self.submarine.sail_info is not None
+        if self.new_td_check.component.value:
+            return self.tf_return_input
+        else:
+            return self.submarine.sail_info.return_dt
 
     @property
     def note(self) -> str:
         assert isinstance(self.note_input.component, discord.ui.TextInput)
         return self.note_input.component.value
+
+    @property
+    def is_update_return_dt(self):
+        assert isinstance(self.new_td_check.component, discord.ui.Checkbox)
+        return self.new_td_check.component.value
 
     async def on_submit(self, interaction: discord.Interaction):
         assert isinstance(self.return_input.component, discord.ui.TextInput)

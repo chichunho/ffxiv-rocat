@@ -121,7 +121,7 @@ class PublishButton(discord.ui.Button):
         )
 
         assert isinstance(interaction.user, discord.Member)
-        is_accepted = await self.submarine.exclusive_update(
+        is_accepted, is_other_cancel = await self.submarine.exclusive_update(
             interaction.user,
             next_worker,
         )
@@ -131,8 +131,15 @@ class PublishButton(discord.ui.Button):
                 ephemeral=True,
             )
             return
-
-        await self.view.update()
+        if is_other_cancel is not None and is_other_cancel:
+            if interaction.response.is_done:
+                await interaction.followup.send(
+                    content="此操作已被取消, 請查看最新資訊決定是否再試",
+                    ephemeral=True,
+                )
+            return
+        if is_other_cancel is None and is_accepted:
+            await self.view.update()
 
 
 class EditButton(discord.ui.Button):
@@ -176,7 +183,7 @@ class EditButton(discord.ui.Button):
         )
 
         assert isinstance(interaction.user, discord.Member)
-        is_accepted = await self.submarine.exclusive_update(
+        is_accepted, is_other_cancel = await self.submarine.exclusive_update(
             interaction.user,
             next_worker,
         )
@@ -187,7 +194,17 @@ class EditButton(discord.ui.Button):
                 ephemeral=True,
             )
             return
-        await self.view.update()
+
+        if is_other_cancel is not None and is_other_cancel:
+            if interaction.response.is_done:
+                await interaction.followup.send(
+                    content="此操作已被取消, 請查看最新資訊決定是否再試",
+                    ephemeral=True,
+                )
+            return
+
+        if is_other_cancel is None and is_accepted:
+            await self.view.update()
 
 
 class CancelButton(discord.ui.Button):
@@ -211,7 +228,7 @@ class CancelButton(discord.ui.Button):
         next_worker = CancelChecker(interaction, self.submarine)
 
         assert isinstance(interaction.user, discord.Member)
-        is_accepted = await self.submarine.exclusive_update(
+        is_accepted, is_other_cancel = await self.submarine.exclusive_update(
             interaction.user,
             next_worker,
         )
@@ -221,7 +238,16 @@ class CancelButton(discord.ui.Button):
                 ephemeral=True,
             )
             return
-        await self.view.update()
+
+        if is_other_cancel is not None and is_other_cancel:
+            if interaction.response.is_done:
+                await interaction.followup.send(
+                    content="此操作已被取消, 請查看最新資訊決定是否再試",
+                    ephemeral=True,
+                )
+            return
+        if is_other_cancel is None and is_accepted:
+            await self.view.update()
 
 
 class FinishButton(discord.ui.Button):
@@ -249,7 +275,7 @@ class FinishButton(discord.ui.Button):
         next_worker = ConfirmChecker(self.submarine)
 
         assert isinstance(interaction.user, discord.Member)
-        is_accepted = await self.submarine.exclusive_update(
+        is_accepted, is_other_cancel = await self.submarine.exclusive_update(
             interaction.user,
             next_worker,
         )
@@ -260,14 +286,23 @@ class FinishButton(discord.ui.Button):
             )
             return
 
-        cleaner = self.fmsg_workers.get_cleaner(
-            interaction,
-            self.submarine,
-            f"{interaction.user.display_name} 確認了潛水艇 **{self.submarine.name}** 的收穫",
-        )
-        await cleaner.start()
+        if is_other_cancel is not None and is_other_cancel:
+            if interaction.response.is_done:
+                await interaction.followup.send(
+                    content="此操作已被取消, 請查看最新資訊決定是否再試",
+                    ephemeral=True,
+                )
+            return
 
-        await self.view.update()
+        if is_other_cancel is None and is_accepted:
+            cleaner = self.fmsg_workers.get_cleaner(
+                interaction,
+                self.submarine,
+                f"{interaction.user.display_name} 確認了潛水艇 **{self.submarine.name}** 的收穫",
+            )
+            await cleaner.start()
+
+            await self.view.update()
 
 
 class ConfigButton(discord.ui.Button):
@@ -517,7 +552,7 @@ class AfterSubmarineReturn:
     @property
     def callback(self) -> list[Callable[[], Awaitable[None]]]:
         writer = self.fmsg_workers.get_writer(
-            f"潛水艇 **{self.submarine.name}** 已經返回, 請檢查收穫!",
+            f"潛水艇 **{self.submarine.name}** 已經返回, 請檢查收穫!\n{self.view.message.jump_url}",
             self.submarine,
         )
         return [writer.start, ReturnChecker(self.submarine).start, self.view.update]

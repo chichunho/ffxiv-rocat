@@ -34,6 +34,8 @@ class SailStarter(CancellableWorker):
         self.after_countdown = after_countdown
         self.modal: SailStartModal | None = None
 
+        self._is_cancelled = False
+
     async def start(self):
         self.modal = SailStartModal(self.cfg, self.sea_zh, self.local_tz)
         await self.interaction.response.send_modal(self.modal)
@@ -56,14 +58,21 @@ class SailStarter(CancellableWorker):
                     self.modal.route,
                     self.modal.return_dt,
                 ),
-                note=self.modal.note,
             )
+
+            if len(self.modal.note) > 0:
+                self.submarine.replace(note=self.modal.note)
 
         self.submarine.upsert_return_countdown(self.after_countdown)
 
     def cancel(self):
+        self._is_cancelled = True
         if self.modal is not None:
             self.modal.cancel()
+
+    @property
+    def is_cancelled(self) -> bool:
+        return self._is_cancelled
 
 
 class SailEditor(CancellableWorker):
@@ -82,6 +91,8 @@ class SailEditor(CancellableWorker):
         self.after_countdown = after_countdown
 
         self.modal: SailEditModal | None = None
+
+        self._is_cancelled = False
 
     async def start(self):
         self.modal = SailEditModal(self.seadict, self.submarine, self.local_tz)
@@ -102,7 +113,11 @@ class SailEditor(CancellableWorker):
                 sail_info=SailInfo(
                     self.modal.sea,
                     self.modal.route,
-                    self.modal.return_dt,
+                    (
+                        self.modal.return_dt
+                        if self.modal.is_update_return_dt
+                        else self.submarine.sail_info.return_dt
+                    ),
                 ),
                 note=self.modal.note,
             )
@@ -110,8 +125,13 @@ class SailEditor(CancellableWorker):
         self.submarine.upsert_return_countdown(self.after_countdown)
 
     def cancel(self):
+        self._is_cancelled = True
         if self.modal is not None:
             self.modal.cancel()
+
+    @property
+    def is_cancelled(self) -> bool:
+        return self._is_cancelled
 
 
 class ReturnChecker(Worker):
@@ -168,6 +188,8 @@ class ConfigWorker(CancellableWorker):
         self.cfg = cfg
         self.guild_cache = guild_cache
 
+        self._is_cancelled = False
+
     async def start(self):
         editors = await self.guild_cache.get_memebers(self.cfg.editor_ids)
         self.modal = ConfigModal(self.cfg, editors)
@@ -182,8 +204,13 @@ class ConfigWorker(CancellableWorker):
         self.cfg.dump()
 
     def cancel(self):
+        self._is_cancelled = True
         if self.modal is not None:
             self.modal.cancel()
+
+    @property
+    def is_cancelled(self) -> bool:
+        return self._is_cancelled
 
 
 class RenameWorker(CancellableWorker):
@@ -194,6 +221,8 @@ class RenameWorker(CancellableWorker):
     ):
         self.interaction = interaction
         self.submarines = submarines
+
+        self._is_cancelled = False
 
     async def start(self):
 
@@ -224,8 +253,13 @@ class RenameWorker(CancellableWorker):
                     submarine.replace(name=new_name)
 
     def cancel(self):
+        self._is_cancelled = True
         if self.modal is not None:
             self.modal.cancel()
+
+    @property
+    def is_cancelled(self) -> bool:
+        return self._is_cancelled
 
 
 class FollowupMessageWorkerGroup:
@@ -275,17 +309,13 @@ class FollowupMessageWorkerGroup:
         async def start(self):
             # the announce channel is at least the default -> the command init channel, should not be None
             assert self.cfg.announce_channel_id is not None
-            announce_channel = self.bot.get_partial_messageable(
-                self.cfg.announce_channel_id
-            )
+            announce_channel = self.bot.get_partial_messageable(self.cfg.announce_channel_id)
 
             try:
                 msg = await announce_channel.send(content=self.message)
 
                 with self.submarine.update_ctx():
-                    self.submarine.replace(
-                        followup_message=FollowupMessage(msg.channel.id, msg.id)
-                    )
+                    self.submarine.replace(followup_message=FollowupMessage(msg.channel.id, msg.id))
 
             except (discord.NotFound, discord.HTTPException, discord.Forbidden) as e:
                 print(e)
@@ -327,9 +357,7 @@ class FollowupMessageWorkerGroup:
 
             try:
                 assert self.cfg.announce_channel_id is not None
-                announce_channel = self.bot.get_partial_messageable(
-                    self.cfg.announce_channel_id
-                )
+                announce_channel = self.bot.get_partial_messageable(self.cfg.announce_channel_id)
                 await announce_channel.send(
                     content=self.cleaned_message,
                     delete_after=12 * 60 * 60,  # keep the clean notice for 12 hours

@@ -18,7 +18,7 @@ class ManagedSubmarine(ManagedSubmarineBase):
         manager: SubmarineManagerBase,
         submarine: Submarine,
         internal_index: int,
-        lock_threshold: timedelta = timedelta(seconds=180),
+        lock_threshold: timedelta = timedelta(seconds=300),
     ):
         self._manager = manager
         self._submarine = submarine
@@ -82,7 +82,7 @@ class ManagedSubmarine(ManagedSubmarineBase):
         self.submarine.status = status or self.submarine.status
         self.submarine.operator_info = operator_info or self.submarine.operator_info
         self.submarine.sail_info = sail_info or self.submarine.sail_info
-        self.submarine.note = note or self.submarine.note
+        self.submarine.note = self.submarine.note if note is None else note
         self.submarine.followup_message = followup_message or self.submarine.followup_message
 
     def clear(
@@ -103,7 +103,13 @@ class ManagedSubmarine(ManagedSubmarineBase):
         self,
         owner: discord.Member,
         worker: Worker,
-    ) -> bool:
+    ) -> tuple[bool, bool | None]:
+        # is accepted, is cancelled by other
+        # False, None -> rejected, the lock owner is not the requestor and in exclusive op time
+        # True, None -> accepted, the op completed successfully
+        # True, False -> accepted, the lock owner is the requestor, this op is replaced by the new op
+        # True, True -> accepted, the lock owner is not the requestor and not in exclusive op time, replace by the new op
+
         if self.lock_state.lock.locked():
             if (
                 self.lock_state.owner is not None
@@ -111,7 +117,7 @@ class ManagedSubmarine(ManagedSubmarineBase):
                 and self.lock_state.acquire_dt is not None
                 and (self.lock_state.acquire_dt - datetime.now(pytz.utc) < self.lock_threshold)
             ):
-                return False
+                return False, None
 
             # we are going to release the lock
 
@@ -125,18 +131,32 @@ class ManagedSubmarine(ManagedSubmarineBase):
             except RuntimeError:
                 pass
 
-        async with self.lock_state.lock:
+        try:
+            # the lock should be acquired immediately, no waiting needed
+            await self.lock_state.lock.acquire()
+
             self.lock_state.owner = owner
             self.lock_state.worker = worker
             self.lock_state.acquire_dt = datetime.now(pytz.utc)
 
             await worker.start()
+            if isinstance(worker, CancellableWorker) and worker.is_cancelled:
+                # the lock is released in another coro
+                if self.lock_state.owner == owner:
+                    return True, False
+                else:
+                    return True, True
 
             self.lock_state.owner = None
             self.lock_state.worker = None
             self.lock_state.acquire_dt = None
 
-        return True
+            self.lock_state.lock.release()
+            return True, None
+        except RuntimeError:
+            pass
+
+        return False, False
 
     def upsert_return_countdown(
         self,
