@@ -158,9 +158,7 @@ class SailStartModal(discord.ui.Modal, Cancellable):
 
 
 class SailEditModal(discord.ui.Modal, Cancellable):
-    def __init__(
-        self, seadict: SeaDict, submarine: ManagedSubmarine, local_tz: BaseTzInfo
-    ):
+    def __init__(self, seadict: SeaDict, submarine: ManagedSubmarine, local_tz: BaseTzInfo):
         super().__init__(title="編輯航行資料", timeout=300)
 
         assert submarine.sail_info is not None
@@ -205,7 +203,7 @@ class SailEditModal(discord.ui.Modal, Cancellable):
 
     @property
     def return_dt(self) -> AwaredDatetime:
-        return self.local_tz.localize(self.tf_return_input)
+        return self.tf_return_input
 
     @property
     def note(self) -> str:

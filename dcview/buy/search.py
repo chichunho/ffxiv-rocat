@@ -13,7 +13,7 @@ from market.enums import AdvancedSearchOption
 
 class BuyModalView(discord.ui.Modal, ItemSearchForm):
     def __init__(self):
-        super().__init__(title="繁中市場查價", timeout=180)
+        super().__init__(title="繁中市場查價", timeout=300)
 
     _master_keyword = ItemMasterKeywordTextInput()
 
